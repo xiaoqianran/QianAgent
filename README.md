@@ -8,6 +8,7 @@
 2. **一步一个概念**：每个 step 只引入一件事，且必须能跑。
 3. **不跳步**：先 loop，再 tools，再 prompt，再 session……后面的压缩 / 权限 / 记忆 / 多 Agent 按路线图继续。
 4. **双后端**：Anthropic Messages API 与 OpenAI 兼容 API 都能用。
+5. **一步一提交**：阿里风格约定式 commit，见 [docs/commit-convention.md](docs/commit-convention.md)。
 
 ## 目录
 
