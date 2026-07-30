@@ -30,8 +30,11 @@
 | **04** | `steps/04_cli_session` | CLI 参数 + REPL + session 落盘 | `python -m qian` 可多轮；`--resume` |
 | **05** | `steps/05_streaming` | 流式打印文本 | 边生成边显示，messages 形状不变 |
 | **06** | `steps/06_permissions` | default/yolo/plan/dontAsk | 危险 shell / 新文件可确认或拒绝 |
+| **07** | `steps/07_mtime` | 读前再改 + mtime | 未 read 禁止 edit；外部修改强制重读 |
+| **08** | `steps/08_context_light` | 大结果落盘 | >30KB 写 `~/.qian/tool-results/` |
+| **09** | `steps/09_context_heavy` | snip + compact | 旧 tool_result 占位；`/compact` 摘要 |
 
-当前累计包 `qian/` = 01～06 的合体。
+当前累计包 `qian/` = 01～09 的合体。
 
 ---
 
@@ -39,9 +42,7 @@
 
 | 步 | 概念 | 关键点 |
 |----|------|--------|
-| **07** | 读前再改 + mtime | 未 read 禁止 edit；外部修改强制重读 |
-| **08** | 上下文压缩（轻） | 超长 tool_result 截断 / 落盘预览 |
-| **09** | 上下文压缩（重） | 利用率高时 snip 旧结果；手动 `/compact` 摘要 |
+| （07–09 已完成，见上表） | | |
 
 ---
 
@@ -62,13 +63,14 @@
 
 ```text
 qian/
-  __main__.py   # CLI + REPL
-  agent.py      # 循环 + 压缩 + 权限调度
-  tools.py      # 工具定义与执行
-  prompt.py     # system prompt
-  session.py    # 会话持久化
-  # 后面逐步增加，仍然扁平：
-  # memory.py / skills.py / subagent.py / mcp_client.py / permissions.py
+  __main__.py      # CLI + REPL
+  agent.py         # 循环 + 权限 + 压缩调度
+  tools.py         # 工具 + mtime
+  permissions.py   # 权限模式
+  context.py       # 落盘 / snip / compact
+  prompt.py        # system prompt
+  session.py       # 会话持久化
+  # 后面：memory.py / skills.py / subagent.py / mcp_client.py
 ```
 
 **刻意不做**：深层 `qian/core/graph/nodes/...` 分包。一个概念一个文件。

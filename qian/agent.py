@@ -7,6 +7,9 @@
   04 Session
   05 Streaming      ← 文本边生成边打印
   06 Permissions    ← 工具执行前 allow/deny/confirm
+  07 mtime          ← 读前再改
+  08 大结果落盘      ← context.persist_large_result
+  09 snip/compact   ← 旧 tool_result 裁剪 + 摘要
 """
 
 from __future__ import annotations
@@ -16,12 +19,21 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+from .context import (
+    estimate_chars,
+    maybe_snip_messages,
+    persist_large_result,
+    summarize_for_compact,
+)
 from .permissions import PermissionMode, check_permission
 from .prompt import build_system_prompt
 from .tools import DEFINITIONS, execute, format_call, to_openai_tools
 
 # confirm_fn(message) -> bool
 ConfirmFn = Callable[[str], bool]
+
+# 粗估：约 4 字符 ≈ 1 token；超过该字符预算触发 snip
+DEFAULT_SNIP_CHAR_BUDGET = 120_000
 
 
 def detect_backend() -> tuple[str, dict[str, Any]]:
@@ -68,8 +80,12 @@ class Agent:
         self.confirm_fn = confirm_fn
         # 同类 confirm 只问一次（用 message 字符串当 key）
         self._confirmed: set[str] = set()
+        # Step 07: abs_path → mtime
+        self._read_file_state: dict[str, float] = {}
         self.messages: list[dict[str, Any]] = []
         self.turn_count = 0
+        self.snip_char_budget = DEFAULT_SNIP_CHAR_BUDGET
+        self.compact_count = 0
         self.system_prompt = build_system_prompt(permission_mode=permission_mode)
 
         if self.backend == "anthropic":
@@ -93,6 +109,13 @@ class Agent:
         final_parts: list[str] = []
 
         for _ in range(self.max_tool_loops):
+            # Step 09: 调用模型前轻量 snip，控制上下文体积
+            snipped = maybe_snip_messages(
+                self.messages, self.backend, budget_chars=self.snip_char_budget
+            )
+            if snipped:
+                print(f"  [context] snipped {snipped} old tool result(s)")
+
             reply = self._call_model()
             self.messages.append(reply["assistant_message"])
             self.turn_count += 1
@@ -115,8 +138,9 @@ class Agent:
                 if self.verbose_tools:
                     print(f"  → {format_call(tu['name'], tu['input'])}")
 
-                # ── Step 06: 权限门 ──────────────────────────
+                # Step 06 权限 → Step 07 mtime 在 execute 内 → Step 08 大结果落盘
                 content = self._run_tool_with_permission(tu["name"], tu["input"])
+                content = persist_large_result(tu["name"], content)
 
                 if self.verbose_tools:
                     preview = content if len(content) <= 400 else content[:400] + "…"
@@ -159,11 +183,12 @@ class Agent:
                 self._confirmed.add(key)
                 print("    ✓ 已批准（本会话同类不再问）")
 
-        return execute(name, inp)
+        return execute(name, inp, self._read_file_state)
 
     def clear_history(self) -> None:
         self.messages = []
         self.turn_count = 0
+        self._read_file_state.clear()
         if self.backend == "openai":
             self.messages.append({"role": "system", "content": self.system_prompt})
 
@@ -175,6 +200,75 @@ class Agent:
         if self.backend == "openai":
             if not self.messages or self.messages[0].get("role") != "system":
                 self.messages.insert(0, {"role": "system", "content": self.system_prompt})
+
+    def context_stats(self) -> dict[str, Any]:
+        chars = estimate_chars(self.messages)
+        return {
+            "messages": len(self.messages),
+            "chars": chars,
+            "snip_budget": self.snip_char_budget,
+            "compact_count": self.compact_count,
+            "read_files_tracked": len(self._read_file_state),
+        }
+
+    def compact(self) -> str:
+        """Step 09: 用模型把历史压成摘要，替换 messages（保留 system）。"""
+        if len(self.messages) <= 2:
+            print("[context] 历史太短，无需 compact")
+            return "noop"
+
+        print("[context] compacting conversation…")
+        summary = summarize_for_compact(
+            self.messages,
+            backend=self.backend,
+            client=self._client,
+            model=self.model,
+            system_prompt=self.system_prompt,
+        )
+        self.messages = []
+        if self.backend == "openai":
+            self.messages.append({"role": "system", "content": self.system_prompt})
+            self.messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "<system-reminder>Conversation was compacted. "
+                        f"Summary:\n{summary}</system-reminder>"
+                    ),
+                }
+            )
+            self.messages.append(
+                {
+                    "role": "assistant",
+                    "content": "Understood. I will continue from the compact summary.",
+                }
+            )
+        else:
+            # Anthropic: system 在 API 字段，不在 messages
+            self.messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "<system-reminder>Conversation was compacted. "
+                        f"Summary:\n{summary}</system-reminder>"
+                    ),
+                }
+            )
+            self.messages.append(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Understood. I will continue from the compact summary.",
+                        }
+                    ],
+                }
+            )
+        self.compact_count += 1
+        # compact 后 mtime 状态仍保留（文件事实不变）
+        print(f"[context] compact done (#{self.compact_count}), chars≈{estimate_chars(self.messages)}")
+        return summary
 
     # ─── 模型调用（Step 05 流式） ───────────────────────────
 

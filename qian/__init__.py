@@ -1,6 +1,7 @@
 """QianAgent — 从零分步搭建的 coding agent。
 
-当前累计：01 loop → 02 tools → 03 prompt → 04 session → 05 stream → 06 permissions。
+当前累计：01–09（loop → tools → prompt → session → stream → permissions
+→ mtime → 大结果落盘 → snip/compact）。
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

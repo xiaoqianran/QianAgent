@@ -1,7 +1,6 @@
 """CLI 入口：python -m qian / qian
 
-累计：Step 01–06
-  loop + tools + prompt + session + streaming + permissions
+累计：Step 01–09
 """
 
 from __future__ import annotations
@@ -59,10 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _make_confirm_fn(interactive: bool):
-    if not interactive:
-        return None
-
+def _make_confirm_fn():
     def confirm(message: str) -> bool:
         try:
             answer = input(f"  允许？(y/n) [{message[:60]}]: ").strip().lower()
@@ -82,7 +78,6 @@ def main(argv: list[str] | None = None) -> None:
     from .session import get_latest_session_id, load_session, new_session_id, save_session
 
     prompt = " ".join(args.prompt).strip()
-    interactive = not prompt  # 有一次性 prompt 时通常非交互；仍允许有 tty 确认
 
     try:
         agent = Agent(
@@ -90,7 +85,7 @@ def main(argv: list[str] | None = None) -> None:
             max_tool_loops=args.max_tool_loops,
             stream=not args.no_stream,
             permission_mode=mode,
-            confirm_fn=_make_confirm_fn(True),  # one-shot 也可能要确认
+            confirm_fn=_make_confirm_fn(),
         )
     except RuntimeError as exc:
         print(f"错误: {exc}", file=sys.stderr)
@@ -114,7 +109,7 @@ def main(argv: list[str] | None = None) -> None:
         f"[qian] backend={agent.backend} model={agent.model} "
         f"mode={mode} stream={agent.stream} session={session_id}"
     )
-    print("[qian] 当前阶段: Step 01-06（+streaming +permissions）\n")
+    print("[qian] 当前阶段: Step 01-09（+mtime +context）\n")
 
     if prompt:
         try:
@@ -129,7 +124,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"\n[qian] 会话已保存: {path}")
         return
 
-    print("进入 REPL。命令: /clear  /turns  /mode  exit")
+    print("进入 REPL。命令: /clear  /turns  /mode  /context  /compact  exit")
     print("直接输入任务即可。\n")
     while True:
         try:
@@ -151,6 +146,22 @@ def main(argv: list[str] | None = None) -> None:
             continue
         if line == "/mode":
             print(f"[qian] permission_mode={agent.permission_mode}")
+            continue
+        if line == "/context":
+            print(f"[qian] {agent.context_stats()}")
+            continue
+        if line == "/compact":
+            try:
+                agent.compact()
+            except Exception as exc:
+                print(f"[qian] compact 失败: {type(exc).__name__}: {exc}")
+            finally:
+                save_session(
+                    session_id,
+                    backend=agent.backend,
+                    model=agent.model,
+                    messages=agent.export_messages(),
+                )
             continue
 
         try:

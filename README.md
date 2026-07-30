@@ -61,6 +61,9 @@ python -m qian --no-stream "你好"
 python steps/01_agent_loop/run.py "你好"
 python steps/02_tools/run.py "读取 README.md 前 5 行"
 python steps/06_permissions/permissions.py   # 权限表自测，不调 API
+python steps/07_mtime/test_mtime.py
+python steps/08_context_light/test_persist.py
+python steps/09_context_heavy/test_snip.py
 ```
 
 ## 当前进度
@@ -73,7 +76,10 @@ python steps/06_permissions/permissions.py   # 权限表自测，不调 API
 | 04 | CLI + 会话：REPL、保存/恢复 messages | ✅ |
 | 05 | 流式输出：Anthropic / OpenAI stream | ✅ |
 | 06 | 权限：default / yolo / plan / dont-ask | ✅ |
-| 07+ | mtime、上下文压缩、记忆、Skills… | ⏳ 见 ROADMAP |
+| 07 | 读前再改 + mtime | ✅ |
+| 08 | 大 tool 结果落盘预览 | ✅ |
+| 09 | snip 旧结果 + `/compact` 摘要 | ✅ |
+| 10+ | 记忆、Skills、子 Agent、MCP… | ⏳ 见 ROADMAP |
 
 ## 和 mini_claude / Mokio 的关系
 
