@@ -16,8 +16,16 @@ from typing import Any
 
 PermissionMode = str  # default | bypass | dontAsk | plan
 
-READ_TOOLS = {"read_file", "list_files"}
+READ_TOOLS = {
+    "read_file",
+    "list_files",
+    "memory_list",
+    "memory_get",
+    "skill",
+}
 EDIT_TOOLS = {"write_file", "edit_file"}
+PLAN_CONTROL_TOOLS = {"enter_plan_mode", "exit_plan_mode"}
+MEMORY_WRITE_TOOLS = {"memory_save"}
 
 # 高危命令粗检（够教学用，不是安全边界的全部）
 DANGEROUS_PATTERNS = [
@@ -42,25 +50,34 @@ def check_permission(
     tool_name: str,
     inp: dict[str, Any],
     mode: PermissionMode = "default",
+    *,
+    plan_file_path: str | None = None,
 ) -> dict[str, str]:
     """返回 {"action": "allow"|"deny"|"confirm", "message": "..."}。"""
     mode = mode or "default"
 
-    # Plan：只读
+    # Plan：只读 + 可写计划文件 + 规划控制
     if mode == "plan":
-        if tool_name in READ_TOOLS:
+        if tool_name in READ_TOOLS or tool_name in PLAN_CONTROL_TOOLS:
             return {"action": "allow", "message": ""}
+        if tool_name in EDIT_TOOLS and plan_file_path:
+            target = str(Path(str(inp.get("file_path") or "")).expanduser().resolve())
+            plan_abs = str(Path(plan_file_path).expanduser().resolve())
+            if target == plan_abs:
+                return {"action": "allow", "message": ""}
         return {
             "action": "deny",
-            "message": f"plan 模式禁止 {tool_name}（只读规划，不能改系统）",
+            "message": f"plan 模式禁止 {tool_name}（只读规划；仅可写计划文件）",
         }
 
     # Yolo
     if mode == "bypass":
         return {"action": "allow", "message": ""}
 
-    # 读工具默认放行
-    if tool_name in READ_TOOLS:
+    # 读工具 / 规划控制 / 记忆写入默认放行
+    if tool_name in READ_TOOLS or tool_name in PLAN_CONTROL_TOOLS:
+        return {"action": "allow", "message": ""}
+    if tool_name in MEMORY_WRITE_TOOLS:
         return {"action": "allow", "message": ""}
 
     needs_confirm = False

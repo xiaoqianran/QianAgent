@@ -87,7 +87,75 @@ DEFINITIONS: list[dict[str, Any]] = [
             "required": ["pattern"],
         },
     },
+    # ── Step 10 记忆 ───────────────────────────────────────
+    {
+        "name": "memory_save",
+        "description": (
+            "保存一条跨会话项目记忆到 ~/.qian/projects/.../memory/。"
+            "type: user|project|feedback|reference。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "type": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["name", "content"],
+        },
+    },
+    {
+        "name": "memory_list",
+        "description": "列出当前项目已保存的记忆。",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "memory_get",
+        "description": "读取一条记忆全文。参数 filename 或 name。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string"},
+                "name": {"type": "string"},
+            },
+        },
+    },
+    # ── Step 11 Skills ─────────────────────────────────────
+    {
+        "name": "skill",
+        "description": "调用已注册 skill（.qian/skills/*/SKILL.md）。返回 skill 指令文本。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill_name": {"type": "string"},
+                "args": {"type": "string"},
+            },
+            "required": ["skill_name"],
+        },
+    },
+    # ── Step 12 Plan mode ──────────────────────────────────
+    {
+        "name": "enter_plan_mode",
+        "description": "进入只读规划模式，只能读文件并写计划文件。",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "exit_plan_mode",
+        "description": "结束规划：展示计划文件并请求用户审批。",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
+
+# Agent 层处理的特殊工具（不在 tools.execute 里跑）
+AGENT_SCOPED_TOOLS = {
+    "memory_save",
+    "memory_list",
+    "memory_get",
+    "skill",
+    "enter_plan_mode",
+    "exit_plan_mode",
+}
 
 
 def to_openai_tools(defs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:

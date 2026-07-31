@@ -64,6 +64,8 @@ python steps/06_permissions/permissions.py   # 权限表自测，不调 API
 python steps/07_mtime/test_mtime.py
 python steps/08_context_light/test_persist.py
 python steps/09_context_heavy/test_snip.py
+python steps/10_memory/test_memory.py
+python steps/11_skills/test_skills.py
 ```
 
 ## 当前进度
@@ -79,7 +81,10 @@ python steps/09_context_heavy/test_snip.py
 | 07 | 读前再改 + mtime | ✅ |
 | 08 | 大 tool 结果落盘预览 | ✅ |
 | 09 | snip 旧结果 + `/compact` 摘要 | ✅ |
-| 10+ | 记忆、Skills、子 Agent、MCP… | ⏳ 见 ROADMAP |
+| 10 | 项目级文件记忆 + 关键词召回 | ✅ |
+| 11 | Skills（SKILL.md + `/name`） | ✅ |
+| 12 | Plan mode 完整审批流 | ✅ |
+| 13+ | 子 Agent、MCP、预算中断… | ⏳ 见 ROADMAP |
 
 ## 和 mini_claude / Mokio 的关系
 

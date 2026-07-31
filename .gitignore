@@ -4,4 +4,5 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
-.qian/
+# 运行时目录（保留示例 skills）
+# .qian/ 下的 skills 可入库；session/tool-results 在用户 home

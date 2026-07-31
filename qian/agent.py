@@ -10,13 +10,18 @@
   07 mtime          ← 读前再改
   08 大结果落盘      ← context.persist_large_result
   09 snip/compact   ← 旧 tool_result 裁剪 + 摘要
+  10 memory         ← 项目级文件记忆
+  11 skills         ← SKILL.md
+  12 plan mode      ← 只读规划 + 审批
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .context import (
@@ -25,12 +30,16 @@ from .context import (
     persist_large_result,
     summarize_for_compact,
 )
+from . import memory as memory_mod
 from .permissions import PermissionMode, check_permission
 from .prompt import build_system_prompt
-from .tools import DEFINITIONS, execute, format_call, to_openai_tools
+from . import skills as skills_mod
+from .tools import AGENT_SCOPED_TOOLS, DEFINITIONS, execute, format_call, to_openai_tools
 
 # confirm_fn(message) -> bool
 ConfirmFn = Callable[[str], bool]
+# plan_approval_fn(plan_text) -> {"choice": str, "feedback": str|None}
+PlanApprovalFn = Callable[[str], dict[str, Any]]
 
 # 粗估：约 4 字符 ≈ 1 token；超过该字符预算触发 snip
 DEFAULT_SNIP_CHAR_BUDGET = 120_000
@@ -78,6 +87,7 @@ class Agent:
         self.stream = stream
         self.permission_mode = permission_mode
         self.confirm_fn = confirm_fn
+        self.plan_approval_fn: PlanApprovalFn | None = None
         # 同类 confirm 只问一次（用 message 字符串当 key）
         self._confirmed: set[str] = set()
         # Step 07: abs_path → mtime
@@ -86,7 +96,12 @@ class Agent:
         self.turn_count = 0
         self.snip_char_budget = DEFAULT_SNIP_CHAR_BUDGET
         self.compact_count = 0
-        self.system_prompt = build_system_prompt(permission_mode=permission_mode)
+        # Step 12 plan
+        self._pre_plan_mode: str | None = None
+        self._plan_file_path: str | None = None
+        if permission_mode == "plan":
+            self._plan_file_path = self._new_plan_path()
+        self.system_prompt = self._build_prompt()
 
         if self.backend == "anthropic":
             import anthropic
@@ -103,9 +118,47 @@ class Agent:
     def set_confirm_fn(self, fn: ConfirmFn) -> None:
         self.confirm_fn = fn
 
+    def set_plan_approval_fn(self, fn: PlanApprovalFn) -> None:
+        self.plan_approval_fn = fn
+
+    def _build_prompt(self) -> str:
+        return build_system_prompt(
+            permission_mode=self.permission_mode,
+            plan_file_path=self._plan_file_path,
+            skills_section=skills_mod.build_skill_descriptions(),
+        )
+
+    def _refresh_system_prompt(self) -> None:
+        self.system_prompt = self._build_prompt()
+        if self.backend == "openai" and self.messages:
+            if self.messages[0].get("role") == "system":
+                self.messages[0]["content"] = self.system_prompt
+
+    def _new_plan_path(self) -> str:
+        d = Path.home() / ".qian" / "plans"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"plan-{int(time.time())}.md"
+        if not path.exists():
+            path.write_text(
+                "# Plan\n\n_Write your step-by-step plan here._\n",
+                encoding="utf-8",
+            )
+        return str(path)
+
     def chat(self, user_text: str) -> str:
         """一轮用户输入 → 可能多轮 tool 调用 → 返回最终文本。"""
-        self.messages.append({"role": "user", "content": user_text})
+        # Step 10: 关键词召回记忆，附在 user 消息前
+        recalled = memory_mod.keyword_recall(user_text)
+        if recalled:
+            mem_block = memory_mod.format_memories_for_prompt(recalled)
+            user_payload = (
+                f"<system-reminder>\n{mem_block}\n</system-reminder>\n\n{user_text}"
+            )
+            print(f"  [memory] recalled {len(recalled)} item(s)")
+        else:
+            user_payload = user_text
+
+        self.messages.append({"role": "user", "content": user_payload})
         final_parts: list[str] = []
 
         for _ in range(self.max_tool_loops):
@@ -159,7 +212,12 @@ class Agent:
         return ("\n".join(final_parts).strip() + "\n" + notice).strip()
 
     def _run_tool_with_permission(self, name: str, inp: dict[str, Any]) -> str:
-        perm = check_permission(name, inp, self.permission_mode)
+        perm = check_permission(
+            name,
+            inp,
+            self.permission_mode,
+            plan_file_path=self._plan_file_path,
+        )
         action = perm["action"]
 
         if action == "deny":
@@ -183,7 +241,96 @@ class Agent:
                 self._confirmed.add(key)
                 print("    ✓ 已批准（本会话同类不再问）")
 
+        if name in AGENT_SCOPED_TOOLS:
+            return self._execute_agent_tool(name, inp)
         return execute(name, inp, self._read_file_state)
+
+    def _execute_agent_tool(self, name: str, inp: dict[str, Any]) -> str:
+        if name == "memory_save":
+            return memory_mod.tool_memory_save(inp)
+        if name == "memory_list":
+            return memory_mod.tool_memory_list(inp)
+        if name == "memory_get":
+            return memory_mod.tool_memory_get(inp)
+        if name == "skill":
+            return skills_mod.execute_skill(
+                str(inp.get("skill_name") or ""),
+                str(inp.get("args") or ""),
+            )
+        if name == "enter_plan_mode":
+            return self._enter_plan_mode()
+        if name == "exit_plan_mode":
+            return self._exit_plan_mode()
+        return f"Error: unhandled agent tool {name}"
+
+    def _enter_plan_mode(self) -> str:
+        if self.permission_mode == "plan":
+            return f"Already in plan mode. Plan file: {self._plan_file_path}"
+        self._pre_plan_mode = self.permission_mode
+        self.permission_mode = "plan"
+        self._plan_file_path = self._new_plan_path()
+        self._refresh_system_prompt()
+        return (
+            f"Entered plan mode (read-only). Write your plan ONLY to:\n"
+            f"{self._plan_file_path}\n"
+            f"When done, call exit_plan_mode."
+        )
+
+    def _exit_plan_mode(self) -> str:
+        if self.permission_mode != "plan":
+            return "Not in plan mode."
+        plan_path = self._plan_file_path
+        plan_text = ""
+        if plan_path and Path(plan_path).exists():
+            plan_text = Path(plan_path).read_text(encoding="utf-8")
+        else:
+            plan_text = "(empty plan file)"
+
+        choice = "execute"
+        feedback = None
+        if self.plan_approval_fn is not None:
+            result = self.plan_approval_fn(plan_text)
+            choice = str(result.get("choice") or "execute")
+            feedback = result.get("feedback")
+        else:
+            print("\n===== PLAN =====")
+            print(plan_text[:4000])
+            print("===== END PLAN (no approval fn → auto execute) =====\n")
+
+        if choice == "keep-planning":
+            note = f"User wants more planning. Feedback: {feedback or '(none)'}"
+            return note
+
+        if choice == "abort":
+            self.permission_mode = self._pre_plan_mode or "default"
+            self._pre_plan_mode = None
+            self._plan_file_path = None
+            self._refresh_system_prompt()
+            return "Plan aborted. Back to previous permission mode."
+
+        # execute or clear-and-execute
+        self.permission_mode = self._pre_plan_mode or "default"
+        self._pre_plan_mode = None
+        cleared = ""
+        if choice == "clear-and-execute":
+            self.clear_history()
+            cleared = " Conversation history cleared."
+        self._refresh_system_prompt()
+        return (
+            f"Plan approved ({choice}). Left plan mode → {self.permission_mode}.{cleared}\n"
+            f"Plan file: {plan_path}\n"
+            f"Now implement the plan."
+        )
+
+    def toggle_plan_mode(self) -> str:
+        if self.permission_mode == "plan":
+            self.permission_mode = self._pre_plan_mode or "default"
+            self._pre_plan_mode = None
+            path = self._plan_file_path
+            self._plan_file_path = None
+            self._refresh_system_prompt()
+            return f"Exited plan mode → {self.permission_mode} (plan was {path})"
+        return self._enter_plan_mode()
 
     def clear_history(self) -> None:
         self.messages = []

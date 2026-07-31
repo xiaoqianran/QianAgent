@@ -33,26 +33,18 @@
 | **07** | `steps/07_mtime` | 读前再改 + mtime | 未 read 禁止 edit；外部修改强制重读 |
 | **08** | `steps/08_context_light` | 大结果落盘 | >30KB 写 `~/.qian/tool-results/` |
 | **09** | `steps/09_context_heavy` | snip + compact | 旧 tool_result 占位；`/compact` 摘要 |
+| **10** | `steps/10_memory` | 文件记忆 | memory_save/list/get + 关键词召回 |
+| **11** | `steps/11_skills` | Skills | `.qian/skills/*/SKILL.md` + skill 工具 |
+| **12** | `steps/12_plan_mode` | Plan 审批 | enter/exit_plan_mode + 四选一 |
 
-当前累计包 `qian/` = 01～09 的合体。
-
----
-
-## Phase 2 — 用起来像真 CLI（续）
-
-| 步 | 概念 | 关键点 |
-|----|------|--------|
-| （07–09 已完成，见上表） | | |
+当前累计包 `qian/` = 01～12 的合体。
 
 ---
 
-## Phase 3 — 进阶能力
+## Phase 3 — 进阶能力（续）
 
 | 步 | 概念 | 关键点 |
 |----|------|--------|
-| **10** | 记忆 | 项目级 md 记忆 + 简单召回 |
-| **11** | Skills | `.qian/skills/*/SKILL.md` |
-| **12** | Plan mode | 只读规划 → 用户批准再执行 |
 | **13** | 子 Agent | `agent` 工具 fork-return |
 | **14** | MCP | stdio JSON-RPC 外挂工具 |
 | **15** | 预算 / 中断 | max_turns、max_cost、Ctrl+C abort |
@@ -68,9 +60,11 @@ qian/
   tools.py         # 工具 + mtime
   permissions.py   # 权限模式
   context.py       # 落盘 / snip / compact
+  memory.py        # 项目记忆
+  skills.py        # SKILL.md
   prompt.py        # system prompt
   session.py       # 会话持久化
-  # 后面：memory.py / skills.py / subagent.py / mcp_client.py
+  # 后面：subagent.py / mcp_client.py
 ```
 
 **刻意不做**：深层 `qian/core/graph/nodes/...` 分包。一个概念一个文件。
