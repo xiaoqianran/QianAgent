@@ -185,6 +185,22 @@ AGENT_SCOPED_TOOLS = {
     "agent",
 }
 
+# Step 17: 无副作用、可并行的工具
+CONCURRENCY_SAFE_TOOLS = {
+    "read_file",
+    "list_files",
+    "memory_list",
+    "memory_get",
+    "skill",  # 只读 skill 模板
+}
+
+
+def is_concurrency_safe(name: str) -> bool:
+    if name.startswith("mcp__"):
+        # MCP 默认保守：不并行（未知副作用）
+        return False
+    return name in CONCURRENCY_SAFE_TOOLS
+
 
 def to_openai_tools(defs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     defs = defs or DEFINITIONS
