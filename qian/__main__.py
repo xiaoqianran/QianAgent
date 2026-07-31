@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.max_turns or args.max_cost:
         print(f"[qian] budget max_turns={args.max_turns} max_cost={args.max_cost}")
-    print("[qian] 当前阶段: Step 01-15（+subagent +mcp +budget）\n")
+    print("[qian] 当前阶段: Step 01-18（+usage +parallel +mcp-demo）\n")
 
     def _save() -> None:
         save_session(
@@ -201,10 +201,11 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"[qian] model turns: {agent.turn_count}")
                 continue
             if line == "/cost":
+                src = "api" if agent.usage_from_api else "estimate"
                 print(
-                    f"[qian] est tokens in/out="
+                    f"[qian] tokens in/out="
                     f"{agent.total_input_tokens}/{agent.total_output_tokens} "
-                    f"cost≈${agent._estimate_cost_usd():.4f}"
+                    f"({src}) cost≈${agent._estimate_cost_usd():.4f}"
                 )
                 continue
             if line == "/mode":

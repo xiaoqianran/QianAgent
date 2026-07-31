@@ -16,6 +16,9 @@
   13 subagent       ← agent 工具 fork-return
   14 MCP            ← mcp__server__tool
   15 budget/abort   ← max_turns / max_cost / Ctrl+C
+  16 usage          ← API usage 精确计费
+  17 parallel tools ← 只读工具并行
+  18 mcp demo       ← 示例 MCP server
 """
 
 from __future__ import annotations
@@ -39,7 +42,15 @@ from .permissions import PermissionMode, check_permission
 from .prompt import build_system_prompt
 from . import skills as skills_mod
 from . import subagent as subagent_mod
-from .tools import AGENT_SCOPED_TOOLS, DEFINITIONS, execute, format_call, to_openai_tools
+from .tools import (
+    AGENT_SCOPED_TOOLS,
+    DEFINITIONS,
+    execute,
+    format_call,
+    is_concurrency_safe,
+    to_openai_tools,
+)
+from . import usage as usage_mod
 
 # confirm_fn(message) -> bool
 ConfirmFn = Callable[[str], bool]
@@ -105,6 +116,7 @@ class Agent:
         self._aborted = False
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.usage_from_api = False  # 是否至少一次拿到过 API usage
         # 同类 confirm 只问一次（用 message 字符串当 key）
         self._confirmed: set[str] = set()
         # Step 07: abs_path → mtime
@@ -183,10 +195,16 @@ class Agent:
         return self._tool_defs
 
     def _estimate_cost_usd(self) -> float:
-        # 粗算：input $3/MTok, output $15/MTok（教学用，非账单）
-        return (self.total_input_tokens / 1_000_000) * 3 + (
-            self.total_output_tokens / 1_000_000
-        ) * 15
+        return usage_mod.cost_usd(
+            self.total_input_tokens, self.total_output_tokens, self.model
+        )
+
+    def _record_usage(self, delta: usage_mod.UsageDelta) -> None:
+        if delta.input_tokens or delta.output_tokens:
+            self.total_input_tokens += delta.input_tokens
+            self.total_output_tokens += delta.output_tokens
+            if delta.from_api:
+                self.usage_from_api = True
 
     def _budget_exceeded(self) -> str | None:
         if self.max_turns is not None and self.turn_count >= self.max_turns:
@@ -258,9 +276,19 @@ class Agent:
             reply = self._call_model()
             self.messages.append(reply["assistant_message"])
             self.turn_count += 1
-            # 粗 token 累计（无 usage 时用字符估算）
-            self.total_input_tokens += max(1, estimate_chars(self.messages) // 4)
-            self.total_output_tokens += max(1, len(reply.get("text") or "") // 4)
+            # Step 16: 优先 API usage
+            delta = reply.get("usage")
+            if isinstance(delta, usage_mod.UsageDelta) and (
+                delta.input_tokens or delta.output_tokens
+            ):
+                self._record_usage(delta)
+            else:
+                self._record_usage(
+                    usage_mod.estimate_usage_from_text(
+                        messages_chars=estimate_chars(self.messages),
+                        output_text=reply.get("text") or "",
+                    )
+                )
 
             text = reply.get("text") or ""
             # 流式时已经边下边打；非流式这里整段打印
@@ -295,7 +323,32 @@ class Agent:
                 print(f"[budget] stop before tools: {refuse}")
                 break
 
-            results = []
+            results = self._execute_tool_batch(tool_uses)
+            self._append_tool_results(results)
+
+        notice = "[stopped: 达到 max_tool_loops 或预算/中断]"
+        if not self.is_sub_agent:
+            print(notice)
+        return ("\n".join(final_parts).strip() + "\n" + notice).strip()
+
+    def _execute_tool_batch(self, tool_uses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Step 17: 全是 concurrency-safe 时并行，否则串行。"""
+        if self._aborted:
+            return [
+                {
+                    "tool_use_id": tu["id"],
+                    "name": tu["name"],
+                    "content": "Tool not executed: aborted",
+                }
+                for tu in tool_uses
+            ]
+
+        can_parallel = len(tool_uses) > 1 and all(
+            is_concurrency_safe(tu["name"]) for tu in tool_uses
+        )
+
+        if not can_parallel:
+            results: list[dict[str, Any]] = []
             for tu in tool_uses:
                 if self._aborted:
                     results.append(
@@ -306,28 +359,43 @@ class Agent:
                         }
                     )
                     continue
-                if self.verbose_tools:
-                    print(f"  → {format_call(tu['name'], tu['input'])}")
+                results.append(self._run_one_tool(tu))
+            return results
 
-                content = self._run_tool_with_permission(tu["name"], tu["input"])
-                content = persist_large_result(tu["name"], content)
+        # 并行
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                if self.verbose_tools:
-                    preview = content if len(content) <= 400 else content[:400] + "…"
-                    print(f"    ⇐ {preview}")
-                results.append(
-                    {
-                        "tool_use_id": tu["id"],
-                        "name": tu["name"],
-                        "content": content,
+        if self.verbose_tools:
+            print(f"  [parallel] {len(tool_uses)} safe tools")
+        out_map: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=min(8, len(tool_uses))) as pool:
+            futs = {pool.submit(self._run_one_tool, tu): tu["id"] for tu in tool_uses}
+            for fut in as_completed(futs):
+                tid = futs[fut]
+                try:
+                    out_map[tid] = fut.result()
+                except Exception as exc:
+                    out_map[tid] = {
+                        "tool_use_id": tid,
+                        "name": "?",
+                        "content": f"Error: parallel tool failed: {exc}",
                     }
-                )
-            self._append_tool_results(results)
+        # 保持与 tool_uses 相同顺序
+        return [out_map[tu["id"]] for tu in tool_uses]
 
-        notice = "[stopped: 达到 max_tool_loops 或预算/中断]"
-        if not self.is_sub_agent:
-            print(notice)
-        return ("\n".join(final_parts).strip() + "\n" + notice).strip()
+    def _run_one_tool(self, tu: dict[str, Any]) -> dict[str, Any]:
+        if self.verbose_tools:
+            print(f"  → {format_call(tu['name'], tu['input'])}")
+        content = self._run_tool_with_permission(tu["name"], tu["input"])
+        content = persist_large_result(tu["name"], content)
+        if self.verbose_tools:
+            preview = content if len(content) <= 400 else content[:400] + "…"
+            print(f"    ⇐ {preview}")
+        return {
+            "tool_use_id": tu["id"],
+            "name": tu["name"],
+            "content": content,
+        }
 
     def _run_tool_with_permission(self, name: str, inp: dict[str, Any]) -> str:
         perm = check_permission(
@@ -554,6 +622,9 @@ class Agent:
             "read_files_tracked": len(self._read_file_state),
             "turns": self.turn_count,
             "est_cost_usd": round(self._estimate_cost_usd(), 6),
+            "usage_from_api": self.usage_from_api,
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
             "max_turns": self.max_turns,
             "max_cost_usd": self.max_cost_usd,
             "tools": len(self._tool_defs),
@@ -637,7 +708,9 @@ class Agent:
             tools=self._active_tools(),
             messages=self.messages,
         )
-        return self._parse_anthropic_message(response, streamed=False)
+        parsed = self._parse_anthropic_message(response, streamed=False)
+        parsed["usage"] = usage_mod.extract_usage_anthropic(response)
+        return parsed
 
     def _call_anthropic_stream(self) -> dict[str, Any]:
         text_parts: list[str] = []
@@ -660,6 +733,7 @@ class Agent:
         # 若 stream 只吐了 text 而 final 结构异常，用已打印文本兜底
         if not parsed["text"] and text_parts:
             parsed["text"] = "".join(text_parts)
+        parsed["usage"] = usage_mod.extract_usage_anthropic(response)
         return parsed
 
     def _parse_anthropic_message(self, response: Any, *, streamed: bool) -> dict[str, Any]:
@@ -701,23 +775,37 @@ class Agent:
             messages=self.messages,
             tools=to_openai_tools(self._active_tools()),
         )
-        return self._parse_openai_message(response.choices[0].message, streamed=False)
+        parsed = self._parse_openai_message(response.choices[0].message, streamed=False)
+        parsed["usage"] = usage_mod.extract_usage_openai(response)
+        return parsed
 
     def _call_openai_stream(self) -> dict[str, Any]:
         """拼 OpenAI stream delta → 与非流式相同的 assistant message 形状。"""
-        stream = self._client.chat.completions.create(
+        base_kwargs: dict[str, Any] = dict(
             model=self.model,
             max_tokens=4096,
             messages=self.messages,
             tools=to_openai_tools(self._active_tools()),
             stream=True,
         )
+        # 部分 OpenAI 兼容网关支持在最后一个 chunk 带回 usage
+        try:
+            stream = self._client.chat.completions.create(
+                **base_kwargs, stream_options={"include_usage": True}
+            )
+        except Exception:
+            stream = self._client.chat.completions.create(**base_kwargs)
 
         text_parts: list[str] = []
         # index → {id, name, arguments}
         tool_acc: dict[int, dict[str, str]] = {}
+        stream_usage = usage_mod.UsageDelta()
 
         for chunk in stream:
+            # usage-only final chunk
+            u = usage_mod.extract_usage_openai(chunk)
+            if u.from_api:
+                stream_usage = u
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -768,7 +856,9 @@ class Agent:
                 for i, v in sorted(tool_acc.items())
             ]
 
-        return self._parse_openai_message(msg, streamed=True)
+        parsed = self._parse_openai_message(msg, streamed=True)
+        parsed["usage"] = stream_usage
+        return parsed
 
     def _parse_openai_message(self, msg: Any, *, streamed: bool) -> dict[str, Any]:
         text = msg.content or ""

@@ -40,8 +40,11 @@
 | **13** | `steps/13_subagent` | 子 Agent | agent 工具 fork-return |
 | **14** | `steps/14_mcp` | MCP | stdio JSON-RPC，`mcp__srv__tool` |
 | **15** | `steps/15_budget` | 预算/中断 | max_turns、max_cost、Ctrl+C |
+| **16** | `steps/16_usage` | API usage 计费 | 优先 response.usage |
+| **17** | `steps/17_parallel_tools` | 只读并行 | ThreadPool 并发 safe tools |
+| **18** | `steps/18_mcp_demo` | MCP demo | echo/add server + 联调 |
 
-当前累计包 `qian/` = 01～15 的合体（Phase 1–3 主干完成）。
+当前累计包 `qian/` = 01～18 的合体。
 
 ---
 
@@ -60,6 +63,7 @@ qian/
   session.py       # 会话持久化
   subagent.py      # 子 Agent 配置
   mcp_client.py    # MCP
+  usage.py         # token / 费用
 ```
 
 **刻意不做**：深层 `qian/core/graph/nodes/...` 分包。一个概念一个文件。

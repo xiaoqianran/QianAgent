@@ -68,6 +68,9 @@ python steps/10_memory/test_memory.py
 python steps/11_skills/test_skills.py
 python steps/13_subagent/test_subagent.py
 python steps/14_mcp/test_mcp_unit.py
+python steps/16_usage/test_usage.py
+python steps/17_parallel_tools/test_parallel.py
+python steps/18_mcp_demo/test_mcp_demo.py
 ```
 
 ## 当前进度
@@ -89,6 +92,9 @@ python steps/14_mcp/test_mcp_unit.py
 | 13 | 子 Agent（agent 工具 fork-return） | ✅ |
 | 14 | MCP（stdio JSON-RPC） | ✅ |
 | 15 | 预算 max-turns/max-cost + Ctrl+C | ✅ |
+| 16 | API usage 精确计费 | ✅ |
+| 17 | 只读工具并行执行 | ✅ |
+| 18 | MCP demo server + 联调 | ✅ |
 
 ## 和 mini_claude / Mokio 的关系
 
