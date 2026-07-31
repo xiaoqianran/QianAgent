@@ -37,17 +37,11 @@
 | **11** | `steps/11_skills` | Skills | `.qian/skills/*/SKILL.md` + skill 工具 |
 | **12** | `steps/12_plan_mode` | Plan 审批 | enter/exit_plan_mode + 四选一 |
 
-当前累计包 `qian/` = 01～12 的合体。
+| **13** | `steps/13_subagent` | 子 Agent | agent 工具 fork-return |
+| **14** | `steps/14_mcp` | MCP | stdio JSON-RPC，`mcp__srv__tool` |
+| **15** | `steps/15_budget` | 预算/中断 | max_turns、max_cost、Ctrl+C |
 
----
-
-## Phase 3 — 进阶能力（续）
-
-| 步 | 概念 | 关键点 |
-|----|------|--------|
-| **13** | 子 Agent | `agent` 工具 fork-return |
-| **14** | MCP | stdio JSON-RPC 外挂工具 |
-| **15** | 预算 / 中断 | max_turns、max_cost、Ctrl+C abort |
+当前累计包 `qian/` = 01～15 的合体（Phase 1–3 主干完成）。
 
 ---
 
@@ -64,7 +58,8 @@ qian/
   skills.py        # SKILL.md
   prompt.py        # system prompt
   session.py       # 会话持久化
-  # 后面：subagent.py / mcp_client.py
+  subagent.py      # 子 Agent 配置
+  mcp_client.py    # MCP
 ```
 
 **刻意不做**：深层 `qian/core/graph/nodes/...` 分包。一个概念一个文件。

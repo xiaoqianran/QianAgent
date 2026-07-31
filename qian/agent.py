@@ -13,6 +13,9 @@
   10 memory         ← 项目级文件记忆
   11 skills         ← SKILL.md
   12 plan mode      ← 只读规划 + 审批
+  13 subagent       ← agent 工具 fork-return
+  14 MCP            ← mcp__server__tool
+  15 budget/abort   ← max_turns / max_cost / Ctrl+C
 """
 
 from __future__ import annotations
@@ -31,9 +34,11 @@ from .context import (
     summarize_for_compact,
 )
 from . import memory as memory_mod
+from .mcp_client import McpManager
 from .permissions import PermissionMode, check_permission
 from .prompt import build_system_prompt
 from . import skills as skills_mod
+from . import subagent as subagent_mod
 from .tools import AGENT_SCOPED_TOOLS, DEFINITIONS, execute, format_call, to_openai_tools
 
 # confirm_fn(message) -> bool
@@ -79,15 +84,27 @@ class Agent:
         stream: bool = True,
         permission_mode: PermissionMode = "default",
         confirm_fn: ConfirmFn | None = None,
+        max_turns: int | None = None,
+        max_cost_usd: float | None = None,
+        is_sub_agent: bool = False,
+        custom_system_prompt: str | None = None,
+        custom_tools: list[dict[str, Any]] | None = None,
+        enable_mcp: bool = True,
     ) -> None:
         self.backend, client_kwargs = detect_backend()
         self.model = model or default_model(self.backend)
         self.max_tool_loops = max_tool_loops
-        self.verbose_tools = verbose_tools
-        self.stream = stream
+        self.verbose_tools = verbose_tools and not is_sub_agent
+        self.stream = stream and not is_sub_agent
         self.permission_mode = permission_mode
         self.confirm_fn = confirm_fn
         self.plan_approval_fn: PlanApprovalFn | None = None
+        self.max_turns = max_turns
+        self.max_cost_usd = max_cost_usd
+        self.is_sub_agent = is_sub_agent
+        self._aborted = False
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
         # 同类 confirm 只问一次（用 message 字符串当 key）
         self._confirmed: set[str] = set()
         # Step 07: abs_path → mtime
@@ -99,9 +116,21 @@ class Agent:
         # Step 12 plan
         self._pre_plan_mode: str | None = None
         self._plan_file_path: str | None = None
-        if permission_mode == "plan":
+        if permission_mode == "plan" and not is_sub_agent:
             self._plan_file_path = self._new_plan_path()
-        self.system_prompt = self._build_prompt()
+        # tools / prompt
+        self._tool_defs: list[dict[str, Any]] = list(custom_tools or DEFINITIONS)
+        if is_sub_agent:
+            # 子 Agent 永不带 agent 工具，防无限嵌套
+            self._tool_defs = [t for t in self._tool_defs if t["name"] != "agent"]
+        self._custom_system_prompt = custom_system_prompt
+        self.system_prompt = custom_system_prompt or self._build_prompt()
+        # MCP
+        self._mcp = McpManager()
+        self._mcp_ready = False
+        self._enable_mcp = enable_mcp and not is_sub_agent
+        # 子 Agent 输出缓冲
+        self._output_buffer: list[str] | None = None
 
         if self.backend == "anthropic":
             import anthropic
@@ -122,11 +151,56 @@ class Agent:
         self.plan_approval_fn = fn
 
     def _build_prompt(self) -> str:
+        if self._custom_system_prompt:
+            return self._custom_system_prompt
         return build_system_prompt(
             permission_mode=self.permission_mode,
             plan_file_path=self._plan_file_path,
             skills_section=skills_mod.build_skill_descriptions(),
+            agents_section=subagent_mod.build_agent_type_section(),
         )
+
+    def abort(self) -> None:
+        self._aborted = True
+
+    def _ensure_mcp(self) -> None:
+        if not self._enable_mcp or self._mcp_ready:
+            return
+        self._mcp_ready = True
+        try:
+            self._mcp.load_and_connect()
+            mcp_defs = self._mcp.get_tool_definitions()
+            if mcp_defs:
+                # 合并 MCP 工具定义
+                names = {t["name"] for t in self._tool_defs}
+                for d in mcp_defs:
+                    if d["name"] not in names:
+                        self._tool_defs.append(d)
+        except Exception as exc:
+            print(f"[mcp] init failed: {exc}", flush=True)
+
+    def _active_tools(self) -> list[dict[str, Any]]:
+        return self._tool_defs
+
+    def _estimate_cost_usd(self) -> float:
+        # 粗算：input $3/MTok, output $15/MTok（教学用，非账单）
+        return (self.total_input_tokens / 1_000_000) * 3 + (
+            self.total_output_tokens / 1_000_000
+        ) * 15
+
+    def _budget_exceeded(self) -> str | None:
+        if self.max_turns is not None and self.turn_count >= self.max_turns:
+            return f"Turn limit reached ({self.turn_count} >= {self.max_turns})"
+        if self.max_cost_usd is not None and self._estimate_cost_usd() >= self.max_cost_usd:
+            return (
+                f"Cost limit reached (${self._estimate_cost_usd():.4f} "
+                f">= ${self.max_cost_usd})"
+            )
+        return None
+
+    def close(self) -> None:
+        if self._mcp_ready:
+            self._mcp.disconnect_all()
 
     def _refresh_system_prompt(self) -> None:
         self.system_prompt = self._build_prompt()
@@ -160,38 +234,81 @@ class Agent:
 
         self.messages.append({"role": "user", "content": user_payload})
         final_parts: list[str] = []
+        self._aborted = False
+        if not self.is_sub_agent:
+            self._ensure_mcp()
 
         for _ in range(self.max_tool_loops):
+            if self._aborted:
+                print("[qian] aborted")
+                break
+
+            reason = self._budget_exceeded()
+            if reason:
+                print(f"[budget] {reason}")
+                break
+
             # Step 09: 调用模型前轻量 snip，控制上下文体积
             snipped = maybe_snip_messages(
                 self.messages, self.backend, budget_chars=self.snip_char_budget
             )
-            if snipped:
+            if snipped and not self.is_sub_agent:
                 print(f"  [context] snipped {snipped} old tool result(s)")
 
             reply = self._call_model()
             self.messages.append(reply["assistant_message"])
             self.turn_count += 1
+            # 粗 token 累计（无 usage 时用字符估算）
+            self.total_input_tokens += max(1, estimate_chars(self.messages) // 4)
+            self.total_output_tokens += max(1, len(reply.get("text") or "") // 4)
 
             text = reply.get("text") or ""
             # 流式时已经边下边打；非流式这里整段打印
             if text and not reply.get("streamed"):
-                print(text, flush=True)
+                if self._output_buffer is not None:
+                    self._output_buffer.append(text)
+                else:
+                    print(text, flush=True)
             if text:
                 final_parts.append(text)
-                if reply.get("streamed"):
+                if reply.get("streamed") and self._output_buffer is None:
                     print(flush=True)  # 流式结束后补换行
 
             tool_uses = reply.get("tool_uses") or []
             if not tool_uses:
                 return "\n".join(final_parts).strip()
 
+            # 预算在 tool 前再查一次
+            reason = self._budget_exceeded()
+            if reason or self._aborted:
+                refuse = reason or "aborted"
+                self._append_tool_results(
+                    [
+                        {
+                            "tool_use_id": tu["id"],
+                            "name": tu["name"],
+                            "content": f"Tool not executed: {refuse}",
+                        }
+                        for tu in tool_uses
+                    ]
+                )
+                print(f"[budget] stop before tools: {refuse}")
+                break
+
             results = []
             for tu in tool_uses:
+                if self._aborted:
+                    results.append(
+                        {
+                            "tool_use_id": tu["id"],
+                            "name": tu["name"],
+                            "content": "Tool not executed: aborted",
+                        }
+                    )
+                    continue
                 if self.verbose_tools:
                     print(f"  → {format_call(tu['name'], tu['input'])}")
 
-                # Step 06 权限 → Step 07 mtime 在 execute 内 → Step 08 大结果落盘
                 content = self._run_tool_with_permission(tu["name"], tu["input"])
                 content = persist_large_result(tu["name"], content)
 
@@ -207,8 +324,9 @@ class Agent:
                 )
             self._append_tool_results(results)
 
-        notice = "[stopped: 达到 max_tool_loops]"
-        print(notice)
+        notice = "[stopped: 达到 max_tool_loops 或预算/中断]"
+        if not self.is_sub_agent:
+            print(notice)
         return ("\n".join(final_parts).strip() + "\n" + notice).strip()
 
     def _run_tool_with_permission(self, name: str, inp: dict[str, Any]) -> str:
@@ -243,6 +361,8 @@ class Agent:
 
         if name in AGENT_SCOPED_TOOLS:
             return self._execute_agent_tool(name, inp)
+        if self._mcp.is_mcp_tool(name):
+            return self._mcp.call_tool(name, inp)
         return execute(name, inp, self._read_file_state)
 
     def _execute_agent_tool(self, name: str, inp: dict[str, Any]) -> str:
@@ -261,7 +381,83 @@ class Agent:
             return self._enter_plan_mode()
         if name == "exit_plan_mode":
             return self._exit_plan_mode()
+        if name == "agent":
+            return self._run_sub_agent(inp)
         return f"Error: unhandled agent tool {name}"
+
+    def _run_sub_agent(self, inp: dict[str, Any]) -> str:
+        if self.is_sub_agent:
+            return "Error: nested sub-agents are not allowed"
+        agent_type = str(inp.get("type") or "general")
+        description = str(inp.get("description") or "sub-task")
+        prompt = str(inp.get("prompt") or "")
+        print(f"  [subagent] start {agent_type}: {description}")
+        cfg = subagent_mod.get_sub_agent_config(agent_type)
+        # 子 Agent 继承权限：plan 模式下只允许 explore/plan 只读类型
+        child_mode = self.permission_mode
+        if child_mode == "plan" and agent_type == "general":
+            return "Error: general sub-agent blocked in plan mode; use explore/plan"
+        sub = Agent(
+            model=self.model,
+            max_tool_loops=min(12, self.max_tool_loops),
+            stream=False,
+            permission_mode=child_mode if child_mode != "plan" else "default",
+            is_sub_agent=True,
+            custom_system_prompt=cfg["system_prompt"],
+            custom_tools=cfg["tools"],
+            enable_mcp=False,
+            max_turns=self.max_turns,
+        )
+        # plan 文件可写权限不传给子代理
+        try:
+            result = sub.run_once(prompt)
+            self.total_input_tokens += result.get("input_tokens", 0)
+            self.total_output_tokens += result.get("output_tokens", 0)
+            print(f"  [subagent] end {agent_type}: {description}")
+            return result.get("text") or "(sub-agent produced no output)"
+        except Exception as exc:
+            print(f"  [subagent] error: {exc}")
+            return f"Sub-agent error: {type(exc).__name__}: {exc}"
+
+    def run_once(self, prompt: str) -> dict[str, Any]:
+        """子 Agent 入口：捕获输出文本。"""
+        self._output_buffer = []
+        prev_in, prev_out = self.total_input_tokens, self.total_output_tokens
+        # 子代理不注入记忆，避免噪音
+        self.messages.append({"role": "user", "content": prompt})
+        final_parts: list[str] = []
+        self._aborted = False
+        for _ in range(self.max_tool_loops):
+            if self._aborted:
+                break
+            reply = self._call_model()
+            self.messages.append(reply["assistant_message"])
+            self.turn_count += 1
+            text = reply.get("text") or ""
+            if text:
+                self._output_buffer.append(text)
+                final_parts.append(text)
+            tool_uses = reply.get("tool_uses") or []
+            if not tool_uses:
+                break
+            results = []
+            for tu in tool_uses:
+                content = self._run_tool_with_permission(tu["name"], tu["input"])
+                content = persist_large_result(tu["name"], content)
+                results.append(
+                    {
+                        "tool_use_id": tu["id"],
+                        "name": tu["name"],
+                        "content": content,
+                    }
+                )
+            self._append_tool_results(results)
+        self._output_buffer = None
+        return {
+            "text": "\n".join(final_parts).strip(),
+            "input_tokens": self.total_input_tokens - prev_in,
+            "output_tokens": self.total_output_tokens - prev_out,
+        }
 
     def _enter_plan_mode(self) -> str:
         if self.permission_mode == "plan":
@@ -356,6 +552,11 @@ class Agent:
             "snip_budget": self.snip_char_budget,
             "compact_count": self.compact_count,
             "read_files_tracked": len(self._read_file_state),
+            "turns": self.turn_count,
+            "est_cost_usd": round(self._estimate_cost_usd(), 6),
+            "max_turns": self.max_turns,
+            "max_cost_usd": self.max_cost_usd,
+            "tools": len(self._tool_defs),
         }
 
     def compact(self) -> str:
@@ -433,7 +634,7 @@ class Agent:
             model=self.model,
             max_tokens=4096,
             system=self.system_prompt,
-            tools=DEFINITIONS,
+            tools=self._active_tools(),
             messages=self.messages,
         )
         return self._parse_anthropic_message(response, streamed=False)
@@ -444,11 +645,14 @@ class Agent:
             model=self.model,
             max_tokens=4096,
             system=self.system_prompt,
-            tools=DEFINITIONS,
+            tools=self._active_tools(),
             messages=self.messages,
         ) as stream:
             for delta in stream.text_stream:
-                print(delta, end="", flush=True)
+                if self._output_buffer is not None:
+                    self._output_buffer.append(delta)
+                else:
+                    print(delta, end="", flush=True)
                 text_parts.append(delta)
             response = stream.get_final_message()
         # text 已打印；仍从 final message 解析 tool_use，保证与 API 一致
@@ -495,7 +699,7 @@ class Agent:
             model=self.model,
             max_tokens=4096,
             messages=self.messages,
-            tools=to_openai_tools(),
+            tools=to_openai_tools(self._active_tools()),
         )
         return self._parse_openai_message(response.choices[0].message, streamed=False)
 
@@ -505,7 +709,7 @@ class Agent:
             model=self.model,
             max_tokens=4096,
             messages=self.messages,
-            tools=to_openai_tools(),
+            tools=to_openai_tools(self._active_tools()),
             stream=True,
         )
 
@@ -521,7 +725,10 @@ class Agent:
                 continue
 
             if delta.content:
-                print(delta.content, end="", flush=True)
+                if self._output_buffer is not None:
+                    self._output_buffer.append(delta.content)
+                else:
+                    print(delta.content, end="", flush=True)
                 text_parts.append(delta.content)
 
             if delta.tool_calls:

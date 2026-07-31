@@ -145,6 +145,33 @@ DEFINITIONS: list[dict[str, Any]] = [
         "description": "结束规划：展示计划文件并请求用户审批。",
         "input_schema": {"type": "object", "properties": {}},
     },
+    # ── Step 13 子 Agent ───────────────────────────────────
+    {
+        "name": "agent",
+        "description": (
+            "启动隔离子 Agent。type: explore(只读搜索)|plan(只读方案)|general(全工具)。"
+            "返回子 Agent 的文本报告。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "3-5 词短描述",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "给子 Agent 的详细任务",
+                },
+                "type": {
+                    "type": "string",
+                    "enum": ["explore", "plan", "general"],
+                    "description": "默认 general",
+                },
+            },
+            "required": ["description", "prompt"],
+        },
+    },
 ]
 
 # Agent 层处理的特殊工具（不在 tools.execute 里跑）
@@ -155,6 +182,7 @@ AGENT_SCOPED_TOOLS = {
     "skill",
     "enter_plan_mode",
     "exit_plan_mode",
+    "agent",
 }
 
 

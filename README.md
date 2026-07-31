@@ -66,6 +66,8 @@ python steps/08_context_light/test_persist.py
 python steps/09_context_heavy/test_snip.py
 python steps/10_memory/test_memory.py
 python steps/11_skills/test_skills.py
+python steps/13_subagent/test_subagent.py
+python steps/14_mcp/test_mcp_unit.py
 ```
 
 ## 当前进度
@@ -84,7 +86,9 @@ python steps/11_skills/test_skills.py
 | 10 | 项目级文件记忆 + 关键词召回 | ✅ |
 | 11 | Skills（SKILL.md + `/name`） | ✅ |
 | 12 | Plan mode 完整审批流 | ✅ |
-| 13+ | 子 Agent、MCP、预算中断… | ⏳ 见 ROADMAP |
+| 13 | 子 Agent（agent 工具 fork-return） | ✅ |
+| 14 | MCP（stdio JSON-RPC） | ✅ |
+| 15 | 预算 max-turns/max-cost + Ctrl+C | ✅ |
 
 ## 和 mini_claude / Mokio 的关系
 

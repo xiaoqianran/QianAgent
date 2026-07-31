@@ -26,6 +26,8 @@ READ_TOOLS = {
 EDIT_TOOLS = {"write_file", "edit_file"}
 PLAN_CONTROL_TOOLS = {"enter_plan_mode", "exit_plan_mode"}
 MEMORY_WRITE_TOOLS = {"memory_save"}
+# agent 工具在 default 下放行；plan 模式禁止（避免规划时狂开子代理改世界）
+AGENT_LAUNCH_TOOLS = {"agent"}
 
 # 高危命令粗检（够教学用，不是安全边界的全部）
 DANGEROUS_PATTERNS = [
@@ -74,10 +76,10 @@ def check_permission(
     if mode == "bypass":
         return {"action": "allow", "message": ""}
 
-    # 读工具 / 规划控制 / 记忆写入默认放行
+    # 读工具 / 规划控制 / 记忆写入 / 子 Agent 默认放行
     if tool_name in READ_TOOLS or tool_name in PLAN_CONTROL_TOOLS:
         return {"action": "allow", "message": ""}
-    if tool_name in MEMORY_WRITE_TOOLS:
+    if tool_name in MEMORY_WRITE_TOOLS or tool_name in AGENT_LAUNCH_TOOLS:
         return {"action": "allow", "message": ""}
 
     needs_confirm = False

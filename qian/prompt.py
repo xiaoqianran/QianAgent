@@ -8,6 +8,7 @@ def build_system_prompt(
     permission_mode: str = "default",
     plan_file_path: str | None = None,
     skills_section: str = "",
+    agents_section: str = "",
 ) -> str:
     mode_note = {
         "default": "当前为 default 权限：读取放行；创建新文件与危险 shell 需用户确认。",
@@ -22,14 +23,15 @@ def build_system_prompt(
     }.get(permission_mode, "")
 
     skills_block = f"\n{skills_section}\n" if skills_section else ""
+    agents_block = f"\n{agents_section}\n" if agents_section else ""
 
     return f"""\
 你是 QianAgent，一个从零分步搭建的轻量 Coding Agent。
-当前能力：Loop + 工具 + 流式 + 权限 + mtime + 上下文压缩 + 记忆 + Skills + Plan + CLI。
+当前能力：Loop + 工具 + 流式 + 权限 + mtime + 压缩 + 记忆 + Skills + Plan + 子Agent + MCP + 预算。
 
 # 权限
 {mode_note}
-{skills_block}
+{skills_block}{agents_block}
 # 做事方式
 - 用户主要会让你读代码、改文件、跑命令、排查错误。
 - 不要在没读过文件的情况下编造文件内容。
@@ -47,6 +49,8 @@ def build_system_prompt(
 - 记忆 → memory_save / memory_list / memory_get
 - 技能 → skill
 - 规划 → enter_plan_mode / exit_plan_mode
+- 委派 → agent（explore/plan/general 子代理，隔离上下文）
+- MCP 工具名形如 mcp__server__tool
 - 独立读操作可并行；有依赖必须串行。
 
 # 输出
