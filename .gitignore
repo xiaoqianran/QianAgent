@@ -12,3 +12,6 @@ __pycache__/
 .qian/worktrees/
 .qian/traces/
 .qian/scheduled_tasks.json
+
+# GitHub Pages build output (produced by .github/build_pages.py in CI)
+_site/
