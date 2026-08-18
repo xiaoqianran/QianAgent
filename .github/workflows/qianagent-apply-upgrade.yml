@@ -5,12 +5,16 @@ on:
     branches: [main]
     paths:
       - .github/workflows/qianagent-apply-upgrade.yml
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'feat/learn-claude-code-runtime-v1'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
