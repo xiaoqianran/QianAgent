@@ -1,0 +1,36 @@
+name: qianagent-apply-upgrade
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/qianagent-apply-upgrade.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/learn-claude-code-runtime-v1
+          fetch-depth: 0
+      - name: Apply verified patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .qian-bootstrap/part* > /tmp/qianagent-upgrade.patch.gz.b64
+          base64 -d /tmp/qianagent-upgrade.patch.gz.b64 | gzip -d > /tmp/qianagent-upgrade.patch
+          git apply --index /tmp/qianagent-upgrade.patch
+          git diff --cached --check
+          rm -rf .qian-bootstrap
+          rm -f .github/workflows/qianagent-bootstrap.yml
+          git add -A
+          python -m compileall -q qian steps tests
+          PYTHONPATH=. python -m unittest discover -v
+          git config user.name "QianAgent Upgrade Bot"
+          git config user.email "qian-agent@users.noreply.github.com"
+          git commit -m "feat(runtime): complete learn-claude-code harness"
+          git push origin HEAD:refs/heads/feat/learn-claude-code-runtime-v1
