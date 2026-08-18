@@ -1,78 +1,93 @@
-# QianAgent 搭建路线图
+# QianAgent Roadmap
 
-每一行 = 一次「只加一件事」的提交级步骤。  
-做完一步，必须能单独跑通，再进入下一步。
+原则：**一个 Step 只引入一个核心概念，累计包始终可运行。**
 
----
-
-## Phase 0 — 心智模型（不写代码也能讲清）
+## 心智模型
 
 ```text
-用户消息
-  → 放进 messages
-  → while True:
-        调用 LLM（带 tools schema）
-        若无 tool_use → 打印文本，结束本轮
-        若有 tool_use → 本地执行 → tool_result 塞回 messages → 继续
+Model = 决策器
+Harness = 上下文 + 工具 + 权限 + 生命周期 + 状态 + 并发 + 恢复
+Agent = Model 在 Harness 中反复执行，直到满足停止条件
 ```
 
-这就是全部。后面所有功能都是挂在这个环上的插件。
+## Phase 1 — 基础 Coding Agent（01–18）
 
----
+| Step | 能力 | 状态 |
+|---:|---|:---:|
+| 01 | Agent Loop | ✅ |
+| 02 | read/write/edit/shell/list tools | ✅ |
+| 03 | System Prompt | ✅ |
+| 04 | CLI / REPL / Session | ✅ |
+| 05 | Streaming | ✅ |
+| 06 | Permission modes | ✅ |
+| 07 | read-before-write + mtime | ✅ |
+| 08 | large tool-result persistence | ✅ |
+| 09 | snip + compact | ✅ |
+| 10 | project Memory | ✅ |
+| 11 | Skills | ✅ |
+| 12 | Plan mode | ✅ |
+| 13 | fork-return Subagent | ✅ |
+| 14 | MCP stdio | ✅ |
+| 15 | budget + abort | ✅ |
+| 16 | API usage / cost | ✅ |
+| 17 | safe parallel tool calls | ✅ |
+| 18 | MCP demo integration | ✅ |
 
-## Phase 1 — 能干活的最小 Coding Agent
+## Phase 2 — Harness Engineering（19–27）
 
-| 步 | 目录 | 只做什么 | 成功标准 |
-|----|------|----------|----------|
-| **01** | `steps/01_agent_loop` | 消息列表 + while 循环 + 假/真模型接口 | 无工具也能对话；有工具调用框架 |
-| **02** | `steps/02_tools` | 4 个工具：read / write / edit / shell | 能读写当前目录文件、跑命令 |
-| **03** | `steps/03_system_prompt` | 抽出 system prompt 构造 | 模型优先用专用工具而非乱 shell |
-| **04** | `steps/04_cli_session` | CLI 参数 + REPL + session 落盘 | `python -m qian` 可多轮；`--resume` |
-| **05** | `steps/05_streaming` | 流式打印文本 | 边生成边显示，messages 形状不变 |
-| **06** | `steps/06_permissions` | default/yolo/plan/dontAsk | 危险 shell / 新文件可确认或拒绝 |
-| **07** | `steps/07_mtime` | 读前再改 + mtime | 未 read 禁止 edit；外部修改强制重读 |
-| **08** | `steps/08_context_light` | 大结果落盘 | >30KB 写 `~/.qian/tool-results/` |
-| **09** | `steps/09_context_heavy` | snip + compact | 旧 tool_result 占位；`/compact` 摘要 |
-| **10** | `steps/10_memory` | 文件记忆 | memory_save/list/get + 关键词召回 |
-| **11** | `steps/11_skills` | Skills | `.qian/skills/*/SKILL.md` + skill 工具 |
-| **12** | `steps/12_plan_mode` | Plan 审批 | enter/exit_plan_mode + 四选一 |
+| Step | 目录 | 只解决什么 | 成功标准 |
+|---:|---|---|---|
+| 19 | `steps/19_hooks` | 生命周期 Hooks + trace | Prompt/Tool/Stop 可拦截、变换、记录 |
+| 20 | `steps/20_task_system` | Todo + durable Task DAG | 依赖校验、claim、complete、自动解锁 |
+| 21 | `steps/21_background_tasks` | 非阻塞长命令 | run/check/list/cancel + 完成通知 |
+| 22 | `steps/22_cron_scheduler` | 持久定时自治 | 5-field cron、重启恢复、分钟去重 |
+| 23 | `steps/23_agent_teams` | 多 Agent 协作 | mailbox、broadcast、自治领任务、plan review |
+| 24 | `steps/24_workflow_runtime` | 可复用确定性编排 | pipeline/parallel、journal、resume |
+| 25 | `steps/25_goal_loop` | 自主停止条件 | 未达目标阻止 Stop；达成/不可能/上限可退出 |
+| 26 | `steps/26_worktree_isolation` | 并行修改隔离 | 独立 branch/worktree + 安全回收 |
+| 27 | `steps/27_integrated_harness` | 统一接线 | 所有能力仍围绕唯一 Agent loop 工作 |
 
-| **13** | `steps/13_subagent` | 子 Agent | agent 工具 fork-return |
-| **14** | `steps/14_mcp` | MCP | stdio JSON-RPC，`mcp__srv__tool` |
-| **15** | `steps/15_budget` | 预算/中断 | max_turns、max_cost、Ctrl+C |
-| **16** | `steps/16_usage` | API usage 计费 | 优先 response.usage |
-| **17** | `steps/17_parallel_tools` | 只读并行 | ThreadPool 并发 safe tools |
-| **18** | `steps/18_mcp_demo` | MCP demo | echo/add server + 联调 |
+## 同步强化
 
-当前累计包 `qian/` = 01～18 的合体。
+Step 19–27 集成时，原有能力也被补强：
 
----
+- Context：模型侧 `compact` + proactive compact + provider overflow reactive retry。
+- Memory：自动 durable extraction + transactional consolidation + path traversal guard。
+- Permission：工作区外文件访问不再静默放行。
+- Subagent：剥离 coordinator tools，防止 Team/Cron/Workflow 递归扩张。
+- Cron：持久任务在 Harness 启动时自动恢复服务；pending-delivery 提供失败后至少一次重试。
+- Session：`--resume` 同时恢复 Todo、active Goal 与 usage/turn 状态。
+- Recovery：非流式 provider transient error 有界退避；Context overflow 独立走 compact。
+- Runtime state：`.qian` 写入增加 symlink/workspace 边界校验；shell 生命周期回收 process group。
+- Workflow：input schema + step/parallel/time limits，resume 前重新校验冻结参数。
 
-## 模块长成后的目标形态（扁平）
+## 模块边界
 
 ```text
-qian/
-  __main__.py      # CLI + REPL
-  agent.py         # 循环 + 权限 + 压缩调度
-  tools.py         # 工具 + mtime
-  permissions.py   # 权限模式
-  context.py       # 落盘 / snip / compact
-  memory.py        # 项目记忆
-  skills.py        # SKILL.md
-  prompt.py        # system prompt
-  session.py       # 会话持久化
-  subagent.py      # 子 Agent 配置
-  mcp_client.py    # MCP
-  usage.py         # token / 费用
+agent.py       唯一循环与模型调用
+  │
+  ├─ tools.py / permissions.py
+  ├─ context.py / memory.py / skills.py
+  ├─ subagent.py / mcp_client.py
+  └─ harness.py
+       ├─ hooks.py
+       ├─ todo.py + tasks.py
+       ├─ background.py + scheduler.py
+       ├─ teams.py
+       ├─ workflows.py
+       ├─ goals.py
+       └─ worktrees.py
 ```
 
-**刻意不做**：深层 `qian/core/graph/nodes/...` 分包。一个概念一个文件。
+**刻意不做：**把代码拆成深层 `core/graph/nodes/...`，或为了“看起来像框架”而把一个简单 loop 藏进复杂抽象。
 
----
+## 下一阶段候选
 
-## 实现纪律
+Phase 3 不应继续无脑堆工具，优先围绕生产可靠性：
 
-1. 新能力先写 `steps/NN_xxx/README.md` 讲清「这一步只解决什么」。
-2. 再写该步最小可运行代码。
-3. 最后把变更合入 `qian/` 累计包。
-4. 每步保留「能讲给别人听的注释」，不写魔法。
+1. provider capability registry / structured outputs；
+2. SQLite event store + crash recovery；
+3. sandbox / container execution boundary；
+4. workflow schema versioning；
+5. eval harness（任务成功率、tool error rate、token/cost、latency）；
+6. web/TUI observability，而不是改变 Agent 核心语义。

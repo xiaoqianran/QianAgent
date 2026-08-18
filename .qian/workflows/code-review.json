@@ -1,0 +1,29 @@
+{
+  "name": "code-review",
+  "description": "Inspect a target, run tests, and produce an independent review in parallel.",
+  "steps": [
+    {
+      "id": "inspect",
+      "type": "agent",
+      "agent_type": "explore",
+      "prompt": "Inspect {{args.target}}. Identify architecture, risky code paths, and the most relevant tests."
+    },
+    {
+      "id": "verify",
+      "type": "parallel",
+      "steps": [
+        {
+          "id": "tests",
+          "type": "shell",
+          "command": "python -m unittest discover -v"
+        },
+        {
+          "id": "review",
+          "type": "agent",
+          "agent_type": "general",
+          "prompt": "Independently review {{args.target}} using this inspection as context:\n{{steps.inspect.output}}"
+        }
+      ]
+    }
+  ]
+}

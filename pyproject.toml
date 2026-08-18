@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qian-agent"
-version = "0.6.0"
-description = "QianAgent — 从零分步搭建的 coding agent（Step 01-18）"
+version = "1.0.0"
+description = "QianAgent — progressive coding-agent harness（Step 01-27）"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [

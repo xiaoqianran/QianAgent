@@ -16,6 +16,20 @@ from .tools import DEFINITIONS
 
 READ_ONLY = {"read_file", "list_files", "memory_list", "memory_get", "grep_search"}
 
+# Lead-only orchestration tools. Sub-agents are workers, not recursive schedulers.
+COORDINATOR_TOOLS = {
+    "agent", "todo_write",
+    "task_create", "task_list", "task_get", "task_claim", "task_complete", "task_update",
+    "schedule_cron", "cancel_cron", "list_crons",
+    "team_spawn", "team_send", "team_broadcast", "team_inbox", "team_list",
+    "team_shutdown", "team_plan_review",
+    "workflow_list", "workflow_run", "workflow_resume", "workflow_status",
+    "goal_set", "goal_status", "goal_clear",
+    "worktree_create", "worktree_list", "worktree_status", "worktree_run",
+    "worktree_keep", "worktree_remove",
+    "background_run", "background_check", "background_list", "background_cancel",
+}
+
 EXPLORE_PROMPT = """\
 你是 QianAgent 的 explore 子代理：只读搜索代码库。
 禁止写文件、改文件、跑会改状态的 shell。
@@ -75,9 +89,15 @@ def get_sub_agent_config(agent_type: str) -> dict[str, Any]:
     custom = _discover_custom_agents().get(agent_type)
     if custom:
         if custom["allowed_tools"]:
-            tools = [t for t in DEFINITIONS if t["name"] in custom["allowed_tools"]]
+            # Custom workers may narrow their tools, but cannot opt back into
+            # lead-only coordinators; that would reintroduce recursive teams,
+            # schedulers and workflows from an isolated child.
+            tools = [
+                t for t in DEFINITIONS
+                if t["name"] in custom["allowed_tools"] and t["name"] not in COORDINATOR_TOOLS
+            ]
         else:
-            tools = [t for t in DEFINITIONS if t["name"] != "agent"]
+            tools = [t for t in DEFINITIONS if t["name"] not in COORDINATOR_TOOLS]
         return {
             "system_prompt": custom["system_prompt"],
             "tools": tools,
@@ -94,7 +114,7 @@ def get_sub_agent_config(agent_type: str) -> dict[str, Any]:
     if agent_type == "plan":
         return {"system_prompt": PLAN_SUB_PROMPT, "tools": read_tools, "type": "plan"}
     # general
-    tools = [t for t in DEFINITIONS if t["name"] != "agent"]
+    tools = [t for t in DEFINITIONS if t["name"] not in COORDINATOR_TOOLS]
     return {"system_prompt": GENERAL_PROMPT, "tools": tools, "type": "general"}
 
 

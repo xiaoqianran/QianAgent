@@ -1,6 +1,6 @@
 """CLI 入口：python -m qian
 
-累计：Step 01–15
+累计：Step 01–27
 """
 
 from __future__ import annotations
@@ -42,6 +42,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--plan", action="store_true", help="只读规划模式")
     p.add_argument("--dont-ask", action="store_true", help="需确认的操作直接拒绝（CI）")
     p.add_argument("--no-stream", action="store_true", help="关闭流式输出")
+    p.add_argument("--no-trace", action="store_true", help="关闭 .qian/traces JSONL 生命周期追踪")
+    p.add_argument("--no-auto-memory", action="store_true", help="关闭每轮结束时的持久记忆自动提取")
+    p.add_argument(
+        "--auto-compact-chars", type=int, default=None,
+        help="上下文字符数超过阈值自动 compact；0 表示关闭 proactive compact",
+    )
     p.add_argument("--max-tool-loops", type=int, default=30)
     p.add_argument("--max-turns", type=int, default=None, help="模型回合上限")
     p.add_argument("--max-cost", type=float, default=None, help="粗估费用上限（USD）")
@@ -92,6 +98,17 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     mode = _resolve_permission_mode(args)
 
+    # Runtime toggles are environment-backed so child construction stays simple.
+    if args.no_trace:
+        import os
+        os.environ["QIAN_TRACE"] = "0"
+    if args.no_auto_memory:
+        import os
+        os.environ["QIAN_AUTO_MEMORY"] = "0"
+    if args.auto_compact_chars is not None:
+        import os
+        os.environ["QIAN_AUTO_COMPACT_CHARS"] = str(max(0, args.auto_compact_chars))
+
     from .agent import Agent
     from .memory import list_memories
     from .session import get_latest_session_id, load_session, new_session_id, save_session
@@ -139,6 +156,7 @@ def main(argv: list[str] | None = None) -> None:
             data = load_session(latest)
             if data and data.get("messages"):
                 agent.import_messages(data["messages"])
+                agent.import_runtime_state(data.get("runtime_state"))
                 session_id = latest
                 print(f"[qian] 已恢复会话 {session_id}（{len(agent.messages)} 条消息）")
             else:
@@ -152,7 +170,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.max_turns or args.max_cost:
         print(f"[qian] budget max_turns={args.max_turns} max_cost={args.max_cost}")
-    print("[qian] 当前阶段: Step 01-18（+usage +parallel +mcp-demo）\n")
+    print(
+        "[qian] 当前阶段: Step 01-27 "
+        "（hooks/tasks/background/cron/teams/workflow/goal/worktree/harness）\n"
+    )
 
     def _save() -> None:
         save_session(
@@ -160,6 +181,7 @@ def main(argv: list[str] | None = None) -> None:
             backend=agent.backend,
             model=agent.model,
             messages=agent.export_messages(),
+            runtime_state=agent.export_runtime_state(),
         )
 
     try:
@@ -172,13 +194,15 @@ def main(argv: list[str] | None = None) -> None:
                     backend=agent.backend,
                     model=agent.model,
                     messages=agent.export_messages(),
+                    runtime_state=agent.export_runtime_state(),
                 )
                 print(f"\n[qian] 会话已保存: {path}")
             return
 
         print(
             "进入 REPL。命令: /clear /turns /mode /context /compact /cost "
-            "/memory /skills /plan /<skill>  exit"
+            "/memory /skills /plan /todo /tasks /background /crons /team "
+            "/workflows /goal /worktrees /trace /<skill>  exit"
         )
         print("直接输入任务即可。\n")
         while True:
@@ -243,6 +267,43 @@ def main(argv: list[str] | None = None) -> None:
                 continue
             if line == "/plan":
                 print(agent.toggle_plan_mode())
+                continue
+            if agent.runtime is not None and line == "/todo":
+                print(agent.runtime.todo.render())
+                continue
+            if agent.runtime is not None and line == "/tasks":
+                print(agent.runtime.tasks.render())
+                continue
+            if agent.runtime is not None and line == "/background":
+                print(agent.runtime.background.list())
+                continue
+            if agent.runtime is not None and line == "/crons":
+                print(agent.runtime.cron.list())
+                continue
+            if agent.runtime is not None and line == "/team":
+                print(agent.runtime.teams.list())
+                continue
+            if agent.runtime is not None and line == "/workflows":
+                print(agent.runtime.workflows.list_workflows())
+                continue
+            if agent.runtime is not None and line == "/goal":
+                print(agent.runtime.goals.status())
+                continue
+            if agent.runtime is not None and line.startswith("/goal "):
+                condition = line[len("/goal "):].strip()
+                if condition.lower() in {"clear", "off", "stop"}:
+                    print(agent.runtime.goals.clear())
+                elif condition:
+                    print(agent.runtime.goals.set(condition))
+                else:
+                    print(agent.runtime.goals.status())
+                _save()
+                continue
+            if agent.runtime is not None and line == "/worktrees":
+                print(agent.runtime.worktrees.list())
+                continue
+            if agent.runtime is not None and line == "/trace":
+                print(f"[qian] trace={agent.runtime.trace.path}")
                 continue
 
             if line.startswith("/") and not line.startswith("//"):

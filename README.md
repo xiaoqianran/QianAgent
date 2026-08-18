@@ -1,83 +1,65 @@
 # QianAgent
 
-从零手写的 **Coding Agent**（Python）。
+QianAgent 是一个从经典 **LLM tool-loop** 一步步长出来的轻量 Coding Agent（Python 3.11+）。
 
-架构思路对齐 [claude-code-from-scratch](https://github.com/Windy3f3f3f3f/claude-code-from-scratch) 的 `mini_claude`，但**完全独立重写**，按最小步骤一层层搭起来，方便读懂、方便改。
+这次 `1.0.0` 把原有 Step 01–18 扩展到 **Step 01–27**：在保留简单主循环的前提下，参考 `learn-claude-code` 的 harness engineering 思路，补齐 Hooks、Todo/Task、后台任务、Cron、Agent Teams、工作流、Goal Loop、Git Worktree 隔离和统一 Runtime Harness；同时增强上下文压缩、自动持久记忆与工作区边界权限。
 
-- **仓库**：https://github.com/xiaoqianran/QianAgent  
-- **当前版本**：`0.6.0`（Step **01–18** 已完成）  
-- **运行时**：Python ≥ 3.11 · OpenAI 兼容 API / Anthropic Messages API  
+> 目标不是复制 Claude Code，而是把“模型的 agency”和“运行时 harness”拆开：模型负责决定下一步，QianAgent 负责提供安全、可恢复、可观测的执行环境。
 
----
-
-## 它是什么
-
-一条经典 **tool-loop**：
+## 核心模型
 
 ```text
-用户消息 → 写入 messages
-while True:
-    调 LLM（带 tools schema）
-    若无 tool_use → 输出文本，结束本轮
-    若有 tool_use → 本地执行 → tool_result 回灌 → 继续
+用户请求
+  ↓
+UserPromptSubmit Hook
+  ↓
+messages + memory recall + runtime notifications
+  ↓
+┌──────────────── Agent Loop ────────────────┐
+│ snip / auto compact / reactive compact     │
+│                ↓                           │
+│              LLM                           │
+│          ┌─────┴─────┐                     │
+│       no tools     tool calls              │
+│          │             ↓                    │
+│      Goal/Stop   PreToolUse Hook            │
+│          │        → Permission              │
+│          │        → Execute                 │
+│          │        → PostToolUse Hook        │
+│          │             ↓                    │
+│          └──────── tool_result ──────────────┘
+└────────────────────────────────────────────┘
+  ↓
+auto memory extraction + Session trace
 ```
 
-在此之上逐步挂上：权限、mtime、上下文压缩、记忆、Skills、Plan、子 Agent、MCP、预算、并行读工具等。
+## 1.0.0 新增能力
 
----
+| Step | 能力 | 说明 |
+|---:|---|---|
+| 19 | Hooks + Trace | Session/User/Tool/Stop 生命周期拦截；JSONL trace |
+| 20 | Todo + Task DAG | Session scratchpad + 持久依赖任务图、claim/complete/unblock |
+| 21 | Background Tasks | 非阻塞 shell、状态查询、取消、完成通知 |
+| 22 | Cron Scheduler | 5-field cron、持久化、进程重启恢复、pending-delivery 至少一次执行 |
+| 23 | Agent Teams | teammate、mailbox、broadcast、自治领取 durable task、plan review 协议 |
+| 24 | Workflow Runtime | `.qian/workflows/*.json`，input contract、pipeline/parallel、limits、journal、resume |
+| 25 | Goal Loop | 可验证停止条件；未满足时自动阻止 Stop 并继续 |
+| 26 | Worktree Isolation | 每任务独立 Git worktree/branch，支持 run/status/keep/remove |
+| 27 | Runtime Harness | 把上述能力统一接入同一个 Agent loop，而不是堆第二套框架 |
 
-## 设计原则
+已有 Step 01–18 的 Loop、文件工具、流式、权限、mtime、大结果落盘、Context、Memory、Skills、Plan、Subagent、MCP、预算/中断、usage 和安全并行均保留。
 
-1. **架构一眼能看懂**：扁平模块，不搞深层分包。  
-2. **一步一个概念**：`steps/NN_*` 只引入一件事，且必须能跑。  
-3. **不跳步**：先 loop，再 tools，再 prompt……按 [ROADMAP.md](ROADMAP.md) 推进。  
-4. **双后端**：Anthropic 与 OpenAI 兼容中转都能用。  
-5. **一步一提交**：阿里风格约定式 commit，见 [docs/commit-convention.md](docs/commit-convention.md)。  
+### 同步增强的旧能力
 
----
-
-## 技术栈（准确）
-
-| 类别 | 选型 |
-|------|------|
-| 语言 | Python 3.11+ |
-| LLM SDK | `openai`、`anthropic` |
-| 配置 | `python-dotenv`（本地 `.env`，**不入库**） |
-| CLI | `argparse` + 可选 Rich 依赖 |
-| 架构 | 单 Agent tool-loop（**非** LangGraph） |
-| 扩展 | Skills / 子 Agent / MCP stdio |
-| 包管理 | `pip install -e .`（setuptools） |
-
-**不是** Node.js / TypeScript 项目。累计运行时全在 `qian/*.py`。
-
----
-
-## 目录结构
-
-```text
-QianAgent/
-├── README.md / ROADMAP.md
-├── pyproject.toml
-├── docs/commit-convention.md
-├── examples/
-│   ├── mcp_demo_server.py      # Step 18 MCP demo
-│   └── mcp-settings.json
-├── .qian/skills/greet/         # 示例 skill
-├── steps/                      # 每步最小可运行切片 + 自测
-│   ├── 01_agent_loop/ … 18_mcp_demo/
-└── qian/                       # 累计可运行包
-    ├── __main__.py             # CLI / REPL
-    ├── agent.py                # 主循环
-    ├── tools.py                # 工具 + mtime + 并行安全集
-    ├── permissions.py
-    ├── context.py              # 落盘 / snip / compact
-    ├── memory.py / skills.py
-    ├── subagent.py / mcp_client.py
-    ├── usage.py                # token / 费用
-    ├── prompt.py / session.py
-```
-
----
+- `compact` 现在既可由 CLI `/compact` 调用，也可由模型主动调用。
+- 上下文先 snip；超过 `QIAN_AUTO_COMPACT_CHARS` 后 proactive compact；若供应商返回 context overflow，再 reactive compact 一次后重试。
+- Memory 每轮结束可自动提取稳定的跨会话事实；排除 secrets、credentials、临时任务状态、原始 tool output 与助手猜测；达到阈值后事务式合并去重。
+- Memory 文件访问增加目录边界检查，拒绝 path traversal。
+- `read_file/write_file/edit_file/list_files` 访问工作区外路径，在普通模式下必须显式确认；`dontAsk/plan` 拒绝。
+- 子 Agent 不继承 Cron/Team/Workflow/Worktree/Background 等协调器工具，避免递归自治失控。
+- `--resume` 现在同时恢复 messages、Todo、active Goal、turn/token/compact 统计；Task/Cron/Workflow/Worktree 仍从各自 durable store 恢复。
+- 非流式模型请求遇到 429、overloaded、timeout、5xx 等瞬时错误会做有界指数退避；流式请求不自动重放，避免重复输出。
+- `.qian` 持久状态写入统一经过 workspace/symlink 边界校验；前台与后台 shell 都回收原 process group，减少 detached child 泄漏。
 
 ## 快速开始
 
@@ -85,102 +67,168 @@ QianAgent/
 git clone https://github.com/xiaoqianran/QianAgent.git
 cd QianAgent
 pip install -e .
-
-# 复制并填写密钥（切勿提交 .env）
 cp .env.example .env
 ```
 
-### 配置 `.env`
-
-**OpenAI 兼容中转：**
+OpenAI-compatible：
 
 ```bash
 OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://your-gateway/v1
-QIAN_MODEL=openai/gpt-oss-120b   # 或 gpt-4o 等
+QIAN_MODEL=gpt-4o
 ```
 
-**Anthropic：**
+Anthropic：
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
-# 可选 ANTHROPIC_BASE_URL=...
 QIAN_MODEL=claude-sonnet-4-6
 ```
 
-### 运行
+运行：
 
 ```bash
-# 一次性任务
-python -m qian "用一句话介绍你自己"
-python -m qian --yolo "在当前目录写一个 hello.html 自我介绍页"
-
-# 交互 REPL
-python -m qian
-
-# 常用开关
-python -m qian --yolo "..."          # 跳过确认
-python -m qian --plan "..."          # 只读规划
-python -m qian --dont-ask "..."      # CI：需确认则拒绝
-python -m qian --no-stream "..."
-python -m qian --max-turns 20 "..."
-python -m qian --max-cost 0.5 "..."
-python -m qian --resume              # 恢复最近会话
+python -m qian "检查这个项目并修复测试"
+python -m qian --yolo "实现需求并运行测试"
+python -m qian --plan "只分析并输出计划"
+python -m qian --dont-ask "CI 环境下执行安全任务"
+python -m qian --resume
 ```
 
-### REPL 命令
-
-| 命令 | 作用 |
-|------|------|
-| `/clear` | 清空对话 |
-| `/turns` `/cost` `/context` | 回合 / 费用 / 上下文统计 |
-| `/mode` `/plan` | 权限与 Plan 切换 |
-| `/compact` | 摘要压缩历史 |
-| `/memory` `/skills` | 列记忆 / 技能 |
-| `/<skill>` | 调用 skill（如 `/greet 小明`） |
-| `exit` | 退出 |
-
-### MCP Demo（可选）
+常用运行时开关：
 
 ```bash
-mkdir -p .qian
-cp examples/mcp-settings.json .qian/settings.json
-# 按需把 args 改成 examples/mcp_demo_server.py 的绝对路径
-python -m qian --yolo "调用 mcp__demo__echo，text=hello"
+python -m qian --no-trace ...
+python -m qian --no-auto-memory ...
+python -m qian --auto-compact-chars 200000 ...
+python -m qian --max-turns 30 --max-cost 1.0 ...
 ```
 
----
-
-## 能力一览（Step 01–18）
-
-| 步骤 | 概念 | 状态 |
-|------|------|------|
-| 01 | Agent Loop | ✅ |
-| 02 | 工具 read/write/edit/shell/list | ✅ |
-| 03 | System Prompt | ✅ |
-| 04 | CLI + 会话落盘 `~/.qian/sessions/` | ✅ |
-| 05 | 流式输出 | ✅ |
-| 06 | 权限 default / yolo / plan / dont-ask | ✅ |
-| 07 | 读前再改 + mtime | ✅ |
-| 08 | 大结果落盘 `~/.qian/tool-results/` | ✅ |
-| 09 | snip + `/compact` | ✅ |
-| 10 | 项目级文件记忆 + 关键词召回 | ✅ |
-| 11 | Skills（`.qian/skills/*/SKILL.md`） | ✅ |
-| 12 | Plan mode 审批流 | ✅ |
-| 13 | 子 Agent（`agent` explore/plan/general） | ✅ |
-| 14 | MCP stdio 客户端 | ✅ |
-| 15 | 预算 + Ctrl+C 中断 | ✅ |
-| 16 | API usage 精确计费 | ✅ |
-| 17 | 只读工具并行 | ✅ |
-| 18 | MCP demo server 联调 | ✅ |
-
-更细的「每步只解决什么」见 [ROADMAP.md](ROADMAP.md)。
-
----
-
-## 自测（无需 API Key 的部分）
+对应环境变量：
 
 ```bash
+QIAN_TRACE=0                 # 关闭 trace
+QIAN_AUTO_MEMORY=0           # 关闭自动 memory extraction
+QIAN_AUTO_COMPACT_CHARS=0    # 关闭 proactive compact（reactive 仍保留）
+QIAN_GOAL_BLOCK_CAP=8        # Goal 阻止 Stop 的最大次数
+QIAN_MODEL_RETRIES=2         # 非流式 transient provider error 重试次数（0-5）
+```
+
+## REPL
+
+```text
+/clear       /turns       /cost         /context
+/compact     /memory      /skills       /plan
+/todo        /tasks       /background   /crons
+/team        /workflows   /goal [condition|clear]  /worktrees
+/trace       /<skill>     exit
+```
+
+## Runtime 工具
+
+### 短期与持久任务
+
+- `todo_write`：当前 session 的短期计划；最多一个 `in_progress`。
+- `task_create/list/get/claim/complete/update`：持久任务 DAG，支持依赖、owner、自动解锁。
+
+### 并发与自治
+
+- `background_run/check/list/cancel`
+- `schedule_cron/list_crons/cancel_cron`
+- `team_spawn/send/broadcast/inbox/list/shutdown/plan_review`
+- `goal_set/status/clear`；REPL 也支持 `/goal <condition>`、`/goal clear`。
+
+高层自治工具在 `default` 模式会先确认；`--dont-ask` 会拒绝，`--yolo` 才直接放行。
+
+### Workflow
+
+工作流放在 `.qian/workflows/*.json`：
+
+```json
+{
+  "name": "review",
+  "description": "Inspect, test, then summarize",
+  "input_schema": {
+    "type": "object",
+    "properties": {"target": {"type": "string"}},
+    "required": ["target"],
+    "additionalProperties": false
+  },
+  "limits": {"max_steps": 16, "max_parallel": 4, "timeout_seconds": 600},
+  "steps": [
+    {
+      "id": "inspect",
+      "type": "agent",
+      "agent_type": "explore",
+      "prompt": "Inspect {{args.target}} and report risks"
+    },
+    {
+      "id": "checks",
+      "type": "parallel",
+      "steps": [
+        {"id": "tests", "type": "shell", "command": "python -m unittest discover -v"},
+        {"id": "review", "type": "agent", "prompt": "Review: {{steps.inspect.output}}"}
+      ]
+    }
+  ]
+}
+```
+
+运行结果持续写入 `.qian/runtime/<run_id>.json`，失败后可 `workflow_resume`。`input_schema` 支持 object/array/string/integer/number/boolean、`required`、`enum` 和 `additionalProperties=false`；静态 step 数、parallel 宽度和单次执行时间都有硬上限。
+
+### Worktree
+
+当两个修改任务真正需要并行且会改同一仓库时：
+
+```text
+worktree_create → 独立 .qian/worktrees/<name> + qian/<name> branch
+worktree_run    → 在隔离目录运行命令
+worktree_status → 查看状态
+after review: worktree_keep / worktree_remove
+```
+
+普通单线修改不要使用 Worktree。
+
+## 目录结构
+
+```text
+QianAgent/
+├── qian/
+│   ├── agent.py          # 唯一主 Agent loop
+│   ├── harness.py        # Runtime composition root
+│   ├── hooks.py          # lifecycle + trace
+│   ├── todo.py           # session scratchpad
+│   ├── tasks.py          # durable DAG
+│   ├── background.py     # async subprocess
+│   ├── scheduler.py      # durable cron
+│   ├── teams.py          # teammate + mailbox/protocol
+│   ├── workflows.py      # declarative workflow runtime
+│   ├── goals.py          # stop-condition controller
+│   ├── worktrees.py      # git isolation
+│   ├── context.py        # persist/snip/compact
+│   ├── memory.py         # recall/extract/consolidate
+│   ├── permissions.py    # policy boundary
+│   ├── tools.py          # tool schema + local execution
+│   ├── subagent.py       # bounded fork-return workers
+│   ├── mcp_client.py     # MCP stdio
+│   └── ...
+├── steps/01_* ... 27_*   # 一步一个概念
+├── tests/test_runtime_extensions.py
+├── examples/
+└── docs/runtime-architecture.md
+```
+
+运行时产生的数据默认不入 Git：`.qian/tasks/`、`.qian/team/`、`.qian/runtime/`、`.qian/worktrees/`、`.qian/traces/`、`.qian/scheduled_tasks.json`。Skills 与 Workflows 可以作为项目配置入库。
+
+## 自测
+
+完整离线回归：
+
+```bash
+python -m compileall -q qian steps tests
+PYTHONPATH=. python -m unittest -v tests.test_runtime_extensions
+PYTHONPATH=. pytest -q tests/test_runtime_extensions.py
+
 python steps/07_mtime/test_mtime.py
 python steps/08_context_light/test_persist.py
 python steps/09_context_heavy/test_snip.py
@@ -190,24 +238,20 @@ python steps/13_subagent/test_subagent.py
 python steps/14_mcp/test_mcp_unit.py
 python steps/16_usage/test_usage.py
 python steps/17_parallel_tools/test_parallel.py
-python steps/18_mcp_demo/test_mcp_demo.py   # 会拉起本地 demo MCP
+python steps/18_mcp_demo/test_mcp_demo.py
 ```
 
----
+## 与 learn-claude-code 的关系
 
-## 和 mini_claude / Mokio 的关系
+QianAgent 使用 `learn-claude-code` 作为**能力与 harness 设计参考**，不是源码镜像：
 
-| | QianAgent | mini_claude | MokioAgent |
-|--|-----------|-------------|------------|
-| 目标 | 自己的 agent，分步长出来 | Claude Code 教学复刻 | MultiAgent 工作流教学 |
-| 编排 | 单 Agent tool-loop | 同左 | LangGraph 图 |
-| 语言 | Python | TS + Python | Python |
-| 写法 | 逐步切片 + 累计包 | 完整成品 | 完整成品 |
+- 保留 QianAgent 原有双后端、MCP、permission modes、mtime 与分步教学结构。
+- 把 `learn-claude-code` 当前课程中的 Hooks、Todo、Task、Background、Cron、Teams、Harness、Workflow、Goal 等概念按 QianAgent 模块边界重新实现。
+- 额外把 legacy Worktree isolation 纳入累计运行时。
+- 所有协调器能力最终都回到同一个 tool-loop；不引入 LangGraph，也不建立第二套隐藏 Agent 框架。
 
-本项目**不复制粘贴** mini_claude 源码，按同样思想重新实现。
+更详细的依赖边界和安全模型见 [`docs/runtime-architecture.md`](docs/runtime-architecture.md)。
 
----
+## License
 
-## 许可
-
-MIT（见仓库 License；若未单独声明，以 GitHub 仓库设置为准）。
+MIT。

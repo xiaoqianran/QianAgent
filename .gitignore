@@ -4,5 +4,11 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
-# 运行时目录（保留示例 skills）
-# .qian/ 下的 skills 可入库；session/tool-results 在用户 home
+
+# QianAgent runtime state. Project-owned skills/workflows remain trackable.
+.qian/tasks/
+.qian/team/
+.qian/runtime/
+.qian/worktrees/
+.qian/traces/
+.qian/scheduled_tasks.json
