@@ -4,9 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
+
+from .background import TOOL_DEFINITIONS as BACKGROUND_TOOL_DEFINITIONS
+from .goals import TOOL_DEFINITIONS as GOAL_TOOL_DEFINITIONS
+from .scheduler import TOOL_DEFINITIONS as CRON_TOOL_DEFINITIONS
+from .tasks import TOOL_DEFINITIONS as TASK_TOOL_DEFINITIONS
+from .teams import TOOL_DEFINITIONS as TEAM_TOOL_DEFINITIONS
+from .todo import TOOL_DEFINITION as TODO_TOOL_DEFINITION
+from .workflows import TOOL_DEFINITIONS as WORKFLOW_TOOL_DEFINITIONS
+from .worktrees import TOOL_DEFINITIONS as WORKTREE_TOOL_DEFINITIONS
 
 DEFINITIONS: list[dict[str, Any]] = [
     {
@@ -86,6 +97,15 @@ DEFINITIONS: list[dict[str, Any]] = [
             },
             "required": ["pattern"],
         },
+    },
+    # ── Step 09 Context compact ───────────────────────────
+    {
+        "name": "compact",
+        "description": (
+            "将长对话历史压缩为可继续执行的摘要。通常自动触发；"
+            "当上下文已经很长且后续任务仍复杂时可主动调用。"
+        ),
+        "input_schema": {"type": "object", "properties": {}},
     },
     # ── Step 10 记忆 ───────────────────────────────────────
     {
@@ -174,24 +194,42 @@ DEFINITIONS: list[dict[str, Any]] = [
     },
 ]
 
+# ── Step 19-27 runtime extensions ─────────────────────────
+DEFINITIONS.extend(
+    [TODO_TOOL_DEFINITION]
+    + TASK_TOOL_DEFINITIONS
+    + BACKGROUND_TOOL_DEFINITIONS
+    + CRON_TOOL_DEFINITIONS
+    + TEAM_TOOL_DEFINITIONS
+    + WORKFLOW_TOOL_DEFINITIONS
+    + GOAL_TOOL_DEFINITIONS
+    + WORKTREE_TOOL_DEFINITIONS
+)
+
 # Agent 层处理的特殊工具（不在 tools.execute 里跑）
 AGENT_SCOPED_TOOLS = {
-    "memory_save",
-    "memory_list",
-    "memory_get",
-    "skill",
-    "enter_plan_mode",
-    "exit_plan_mode",
-    "agent",
+    "compact", "memory_save", "memory_list", "memory_get", "skill",
+    "enter_plan_mode", "exit_plan_mode", "agent",
+    "todo_write",
+    "task_create", "task_list", "task_get", "task_claim", "task_complete", "task_update",
+    "background_run", "background_check", "background_list", "background_cancel",
+    "schedule_cron", "list_crons", "cancel_cron",
+    "team_spawn", "team_send", "team_broadcast", "team_inbox", "team_list",
+    "team_shutdown", "team_plan_review",
+    "workflow_list", "workflow_run", "workflow_resume", "workflow_status",
+    "goal_set", "goal_status", "goal_clear",
+    "worktree_create", "worktree_list", "worktree_status", "worktree_run",
+    "worktree_keep", "worktree_remove",
 }
 
 # Step 17: 无副作用、可并行的工具
 CONCURRENCY_SAFE_TOOLS = {
-    "read_file",
-    "list_files",
-    "memory_list",
-    "memory_get",
-    "skill",  # 只读 skill 模板
+    "read_file", "list_files", "memory_list", "memory_get", "skill",
+    "task_list", "task_get",
+    "background_check", "background_list",
+    "list_crons", "team_list",
+    "workflow_list", "workflow_status",
+    "goal_status", "worktree_list", "worktree_status",
 }
 
 
@@ -338,19 +376,68 @@ def _edit_file(inp: dict[str, Any]) -> str:
     return f"Edited {path}"
 
 
+def _shell_popen_kwargs() -> dict[str, Any]:
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
+def _cleanup_shell_process_group(process: subprocess.Popen[str], *, force: bool = False) -> None:
+    """Best-effort cleanup of descendants spawned by a shell command.
+
+    On POSIX the session/process-group ID remains usable even after the shell
+    itself exits, which prevents commands such as ``nohup ... &`` from leaking
+    helpers beyond the tool call. Windows uses ``taskkill /T`` while the parent
+    is still addressable.
+    """
+    try:
+        if os.name == "nt":
+            if process.poll() is None:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True, timeout=3, check=False,
+                )
+            return
+        sig = signal.SIGKILL if force else signal.SIGTERM
+        os.killpg(process.pid, sig)
+        if not force:
+            time.sleep(0.05)
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return
+            os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
+
+
 def _run_shell(inp: dict[str, Any]) -> str:
     timeout_ms = float(inp.get("timeout") or 30000)
-    result = subprocess.run(
+    process = subprocess.Popen(
         inp["command"],
         shell=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout_ms / 1000,
+        **_shell_popen_kwargs(),
     )
-    out = result.stdout or ""
-    err = result.stderr or ""
-    if result.returncode != 0:
-        return f"exit={result.returncode}\nstdout:\n{out}\nstderr:\n{err}"
+    timed_out = False
+    try:
+        out, err = process.communicate(timeout=timeout_ms / 1000)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _cleanup_shell_process_group(process, force=True)
+        out, err = process.communicate()
+    finally:
+        # Also reap detached/background descendants after a successful shell exit.
+        _cleanup_shell_process_group(process)
+
+    out = out or ""
+    err = err or ""
+    if timed_out:
+        return f"Error: Timeout ({timeout_ms / 1000:g}s)\nstdout:\n{out}\nstderr:\n{err}"
+    if process.returncode != 0:
+        return f"exit={process.returncode}\nstdout:\n{out}\nstderr:\n{err}"
     return out or "(no output)"
 
 

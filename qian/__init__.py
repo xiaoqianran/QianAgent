@@ -1,6 +1,3 @@
-"""QianAgent — 从零分步搭建的 coding agent。
+"""QianAgent — progressive coding-agent harness (Step 01–27)."""
 
-当前累计：01–18（usage / parallel tools / mcp demo）。
-"""
-
-__version__ = "0.6.0"
+__version__ = "1.0.0"
