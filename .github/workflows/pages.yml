@@ -3,17 +3,25 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    paths:
+      - "README.md"
+      - ".github/build_pages.py"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "README.md"
+      - ".github/build_pages.py"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
-# Allow this job to deploy to GitHub Pages
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Allow one concurrent deployment, cancelling in-progress runs
+# Keep PR smoke builds independent from the real main-branch deployment.
 concurrency:
-  group: github-pages
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,20 +37,30 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip markdown
+        run: python -m pip install --disable-pip-version-check "markdown>=3.7,<4"
 
       - name: Build site from README
         run: python .github/build_pages.py
 
+      - name: Verify Pages artifact
+        run: |
+          test -s _site/index.html
+          test -f _site/.nojekyll
+          grep -q '<aside class="toc"' _site/index.html
+          grep -q 'class="mermaid"' _site/index.html
+
       - name: Setup Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
