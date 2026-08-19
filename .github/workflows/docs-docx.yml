@@ -7,6 +7,11 @@ on:
       - "docs/learn-claude-code-notes.md"
       - ".github/build_course_docx.py"
       - ".github/workflows/docs-docx.yml"
+  pull_request:
+    paths:
+      - "docs/learn-claude-code-notes.md"
+      - ".github/build_course_docx.py"
+      - ".github/workflows/docs-docx.yml"
   workflow_dispatch:
 
 permissions:
@@ -20,10 +25,11 @@ jobs:
   build-docx:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout source branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,6 +43,7 @@ jobs:
         run: python .github/build_course_docx.py
 
       - name: Commit generated DOCX when changed
+        if: github.actor != 'github-actions[bot]'
         run: |
           if git diff --quiet -- docx/QianAgent-Learn-Claude-Code-Notes.docx; then
             echo "DOCX is already up to date."
@@ -46,6 +53,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docx/QianAgent-Learn-Claude-Code-Notes.docx
           git commit -m "docs: refresh generated DOCX notes"
-          git push
+          git push origin HEAD
 
-# Generated DOCX is intentionally committed back to main so the repository always contains a downloadable Word copy.
+# PR runs materialize the binary before merge; main pushes keep the checked-in Word copy in sync.
