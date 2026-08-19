@@ -47,3 +47,5 @@ jobs:
           git add docx/QianAgent-Learn-Claude-Code-Notes.docx
           git commit -m "docs: refresh generated DOCX notes"
           git push
+
+# Generated DOCX is intentionally committed back to main so the repository always contains a downloadable Word copy.
