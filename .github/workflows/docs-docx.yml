@@ -56,3 +56,4 @@ jobs:
           git push origin HEAD
 
 # PR runs materialize the binary before merge; main pushes keep the checked-in Word copy in sync.
+# This branch intentionally exercises that PR materialization path before the binary is merged.
