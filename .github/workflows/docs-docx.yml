@@ -44,16 +44,19 @@ jobs:
 
       - name: Commit generated DOCX when changed
         if: github.actor != 'github-actions[bot]'
+        shell: bash
         run: |
-          if git diff --quiet -- docx/QianAgent-Learn-Claude-Code-Notes.docx; then
+          set -euo pipefail
+          target="docx/QianAgent-Learn-Claude-Code-Notes.docx"
+          if [[ -z "$(git status --porcelain -- "$target")" ]]; then
             echo "DOCX is already up to date."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docx/QianAgent-Learn-Claude-Code-Notes.docx
+          git add "$target"
           git commit -m "docs: refresh generated DOCX notes"
-          git push origin HEAD
+          git push origin "HEAD:${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
 
 # PR runs materialize the binary before merge; main pushes keep the checked-in Word copy in sync.
 # This branch intentionally exercises that PR materialization path before the binary is merged.
