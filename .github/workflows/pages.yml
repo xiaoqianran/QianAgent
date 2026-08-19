@@ -70,3 +70,5 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+# Validation branch: this one-line change intentionally exercises the pull-request build-only path.
