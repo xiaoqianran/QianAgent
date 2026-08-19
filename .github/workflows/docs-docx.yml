@@ -1,0 +1,49 @@
+name: Build DOCX notes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/learn-claude-code-notes.md"
+      - ".github/build_course_docx.py"
+      - ".github/workflows/docs-docx.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-docx-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-docx:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install DOCX dependency
+        run: python -m pip install --disable-pip-version-check "python-docx>=1.1,<2"
+
+      - name: Generate Word reading copy
+        run: python .github/build_course_docx.py
+
+      - name: Commit generated DOCX when changed
+        run: |
+          if git diff --quiet -- docx/QianAgent-Learn-Claude-Code-Notes.docx; then
+            echo "DOCX is already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docx/QianAgent-Learn-Claude-Code-Notes.docx
+          git commit -m "docs: refresh generated DOCX notes"
+          git push
